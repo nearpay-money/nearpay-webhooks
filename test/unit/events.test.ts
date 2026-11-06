@@ -15,9 +15,22 @@ describe("subscriptions", () => {
     ).toEqual({
       ok: ["payment_intent.succeeded", "agent_payment.failed"],
     });
-    expect(normalizeEnabledEvents(["payment_intent.done"])).toEqual({ unknown: "payment_intent.done" });
+    expect(normalizeEnabledEvents(["payment_intent.done"])).toEqual({ unknown: "payment_intent.done", index: 0 });
     expect(SUBSCRIBABLE).not.toContain("ping");
     expect(SUBSCRIBABLE.length).toBe(WEBHOOK_TYPE_NAMES.length - 1);
+  });
+
+  it("reports the first unknown type with its index, even next to `*` (spec 0.1.5 lets any string through)", () => {
+    expect(normalizeEnabledEvents(["payment_intent.succeeded", "nope", "also.nope"])).toEqual({
+      unknown: "nope",
+      index: 1,
+    });
+    expect(normalizeEnabledEvents(["*", "payment_intent.done"])).toEqual({ unknown: "payment_intent.done", index: 1 });
+    expect(normalizeEnabledEvents(["PAYMENT_INTENT.SUCCEEDED"])).toEqual({
+      unknown: "PAYMENT_INTENT.SUCCEEDED",
+      index: 0,
+    });
+    expect(normalizeEnabledEvents(["*", "*"])).toEqual({ ok: ["*"] });
   });
 
   it("matches types", () => {

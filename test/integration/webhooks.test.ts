@@ -117,9 +117,31 @@ describe("webhook endpoints", () => {
       expect(r.r.status, url).toBe(400);
       expect(r.r.body.error.code, url).toBe("url_invalid");
     }
+    // spec 0.1.5: any string passes request validation; the service answers event_type_unknown
     const unknown = await endpoint(m, { enabled_events: ["payment_intent.done"] });
     expect(unknown.r.status).toBe(400);
-    expect(unknown.r.body.error.param).toBe("enabled_events[0]");
+    expect(unknown.r.body.error).toMatchObject({
+      code: "event_type_unknown",
+      type: "invalid_request_error",
+      param: "enabled_events[0]",
+      message: "Unknown event type: payment_intent.done",
+    });
+    const withStar = await endpoint(m, { enabled_events: ["*", "payment_intent.done"] });
+    expect(withStar.r.body.error).toMatchObject({ code: "event_type_unknown", param: "enabled_events[1]" });
+    const ok = await endpoint(m, { enabled_events: ["payment_intent.succeeded"] });
+    const upd = await st.call("PATCH", `/v1/webhook_endpoints/${ok.r.body.id}`, {
+      token: ok.token,
+      body: { enabled_events: ["payment_intent.succeeded", "refund.created"] },
+    });
+    expect(upd.status).toBe(400);
+    expect(upd.body.error).toMatchObject({ code: "event_type_unknown", param: "enabled_events[1]" });
+    const kept = await st.call("GET", `/v1/webhook_endpoints/${ok.r.body.id}`, { token: ok.token });
+    expect(kept.body.enabled_events).toEqual(["payment_intent.succeeded"]);
+    // request validation still bounds the items
+    const long = await endpoint(m, { enabled_events: ["x".repeat(101)] });
+    expect(long.r.body.error.code).toBe("invalid_request");
+    const empty = await endpoint(m, { enabled_events: [""] });
+    expect(empty.r.body.error.code).toBe("invalid_request");
   });
 
   it("lists with cursors, updates (URL re-validated, disable/enable) and deletes", async () => {

@@ -37,7 +37,7 @@ function checkUrl(w: Webhooks, m: Merchant, url: string): void {
 function checkEvents(list: readonly string[]): string[] {
   const r = normalizeEnabledEvents(list);
   if ("unknown" in r)
-    throw new ApiError("event_type_unknown", { params: { type: r.unknown }, param: "enabled_events" });
+    throw new ApiError("event_type_unknown", { params: { type: r.unknown }, param: `enabled_events[${r.index}]` });
   return r.ok;
 }
 
