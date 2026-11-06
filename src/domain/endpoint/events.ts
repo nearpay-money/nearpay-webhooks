@@ -6,20 +6,19 @@ const KNOWN = new Set<string>(WEBHOOK_TYPE_NAMES);
 /** Public types a merchant may subscribe to (`ping` is sent by `…/test` regardless of subscriptions). */
 export const SUBSCRIBABLE: readonly string[] = WEBHOOK_TYPE_NAMES.filter((t) => t !== "ping");
 
-export type EnabledEvents = { ok: string[] } | { unknown: string };
+export type EnabledEvents = { ok: string[] } | { unknown: string; index: number };
 
 /**
- * Validates and normalises `enabled_events`: `*` anywhere means all events (stored as `["*"]`);
- * duplicates are dropped; the order is kept. An entry that is not a webhook type is reported.
+ * Validates and normalises `enabled_events`: every entry must be `*` or a webhook type (since spec
+ * 0.1.5 request validation lets any string through, so this is the only check; the first unknown entry
+ * is reported, even next to `*`); `*` anywhere means all events (stored as `["*"]`); duplicates are
+ * dropped; the order is kept.
  */
 export function normalizeEnabledEvents(list: readonly string[]): EnabledEvents {
+  const index = list.findIndex((t) => t !== "*" && !KNOWN.has(t));
+  if (index >= 0) return { unknown: list[index] as string, index };
   if (list.includes("*")) return { ok: ["*"] };
-  const out: string[] = [];
-  for (const t of list) {
-    if (!KNOWN.has(t)) return { unknown: t };
-    if (!out.includes(t)) out.push(t);
-  }
-  return { ok: out };
+  return { ok: [...new Set(list)] };
 }
 
 /** True when an endpoint with these subscriptions receives `type`. */

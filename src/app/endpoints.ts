@@ -37,7 +37,7 @@ function checkUrl(w: Webhooks, m: Merchant, url: string): void {
 function checkEvents(list: readonly string[]): string[] {
   const r = normalizeEnabledEvents(list);
   if ("unknown" in r)
-    throw new ApiError("event_type_unknown", { params: { type: r.unknown }, param: "enabled_events" });
+    throw new ApiError("event_type_unknown", { params: { type: r.unknown }, param: `enabled_events[${r.index}]` });
   return r.ok;
 }
 
@@ -99,7 +99,7 @@ function endpointUuid(id: string): string {
 }
 
 /** An endpoint of this account and mode (deleted ones are gone); `lock` for updates. */
-async function own(db: Webhooks["db"] | Tx, m: Merchant, id: string, lock = false): Promise<EndpointRow> {
+export async function own(db: Webhooks["db"] | Tx, m: Merchant, id: string, lock = false): Promise<EndpointRow> {
   let q = db
     .selectFrom("webhook_endpoints")
     .selectAll()

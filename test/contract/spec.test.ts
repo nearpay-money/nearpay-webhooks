@@ -8,12 +8,18 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   API_VERSION,
+  createWebhookEndpoint,
   Event,
+  ID_PREFIXES,
+  listWebhookEndpointDeliveries,
   PUBLIC_ROUTES,
   parseSignatureHeader,
+  SPEC_VERSION,
   SUBJECT_TO_WEBHOOK_TYPE,
+  updateWebhookEndpoint,
   WEBHOOK_TYPE_NAMES,
   WEBHOOK_TYPES,
+  WebhookDelivery,
   WebhookEndpoint,
 } from "@nearpay/spec";
 import { unhandledSubjects } from "@nearpay-internal/bus";
@@ -23,7 +29,14 @@ import { envelopeOf, INTERNAL_ROUTES, SUBJECTS, type Subject } from "@nearpay-in
 import { agentPayment, checkoutSession, paymentIntent } from "@nearpay-internal/testing";
 import { describe, expect, it } from "vitest";
 import { webhooksRoutes } from "../../src/api/routes.js";
-import { type EndpointRow, type EventRow, endpointView, eventView } from "../../src/app/views.js";
+import {
+  type DeliveryRow,
+  deliveryView,
+  type EndpointRow,
+  type EventRow,
+  endpointView,
+  eventView,
+} from "../../src/app/views.js";
 import { INGESTED, webhooksHandlers } from "../../src/consumers/handlers.js";
 import { pingObject } from "../../src/domain/event/render.js";
 import { newEndpointSecret, signatureHeader, signingKeyFromSeed } from "../../src/signing/signer.js";
@@ -39,7 +52,27 @@ describe("routes and events", () => {
         .map((r) => r.id)
         .sort(),
     );
-    expect(bindings).toHaveLength(9);
+    expect(bindings).toHaveLength(10);
+    expect(bindings.map((b) => b.route.id)).toContain("listWebhookEndpointDeliveries");
+  });
+
+  it("is built against spec 0.1.5: whd_ ids, the deliveries route with the endpoint read auth, open enabled_events", () => {
+    expect(SPEC_VERSION).toBe("0.1.5");
+    expect(ID_PREFIXES.whd).toEqual({ object: "webhook_delivery", owner: "webhooks" });
+    expect(listWebhookEndpointDeliveries).toMatchObject({
+      method: "GET",
+      path: "/v1/webhook_endpoints/{id}/deliveries",
+      service: "webhooks",
+      stage: 1,
+    });
+    const read = PUBLIC_ROUTES.find((r) => r.id === "getWebhookEndpoint");
+    expect(listWebhookEndpointDeliveries.auth).toEqual(read?.auth);
+    expect(listWebhookEndpointDeliveries.roles).toEqual(read?.roles);
+    // unknown types reach the service (which answers event_type_unknown); responses stay typed
+    for (const r of [createWebhookEndpoint, updateWebhookEndpoint]) {
+      expect(r.errors).toContain("event_type_unknown");
+      expect(r.body?.shape.enabled_events.safeParse(["payment_intent.done"]).success).toBe(true);
+    }
   });
 
   it("handles every subject the catalogue routes to webhooks (payments + agentpay), each with a public type", () => {
@@ -156,6 +189,27 @@ describe("objects", () => {
       };
       const r = Event.safeParse(eventView(row));
       expect(r.success, `${type}: ${r.success ? "" : r.error.issues[0]?.message}`).toBe(true);
+    }
+  });
+
+  it("webhook deliveries parse in every status", () => {
+    for (const status of ["pending", "failed", "succeeded", "abandoned"] as const) {
+      const row: DeliveryRow = {
+        id: uuidv7(),
+        event_id: uuidv7(),
+        endpoint_id: uuidv7(),
+        status,
+        attempts: status === "pending" ? 0 : 1,
+        next_attempt_at: status === "failed" || status === "pending" ? now : null,
+        last_status_code: status === "succeeded" ? 200 : status === "failed" ? 500 : null,
+        last_error: status === "failed" ? "HTTP 500" : null,
+        created_at: now,
+        succeeded_at: status === "succeeded" ? now : null,
+        event_type: "checkout.session.completed",
+        livemode: false,
+      };
+      const r = WebhookDelivery.safeParse(deliveryView(row));
+      expect(r.success, `${status}: ${r.success ? "" : r.error.issues[0]?.message}`).toBe(true);
     }
   });
 

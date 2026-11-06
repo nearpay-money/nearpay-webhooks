@@ -22,6 +22,15 @@ export interface IngestResult {
   readonly deliveries: number;
 }
 
+/**
+ * The object's own `sequence` when the producer sends it (spec 0.1.5: CheckoutSession and AgentPayment
+ * carry it too), otherwise the aggregate version of the domain event (producers older than 0.1.5).
+ */
+export function objectSequence(object: unknown, aggregateVersion: number): number {
+  const s = (object as { sequence?: unknown } | null)?.sequence;
+  return typeof s === "number" && Number.isInteger(s) && s >= 0 ? s : aggregateVersion;
+}
+
 /** Turns one domain event into a public event and its deliveries, inside the consumer's transaction. */
 export async function ingest(w: Webhooks, tx: Tx, e: Envelope): Promise<IngestResult> {
   const type = publicType(e.subject);
@@ -45,7 +54,7 @@ export async function ingest(w: Webhooks, tx: Tx, e: Envelope): Promise<IngestRe
       source_event_id: e.id,
       object_type: e.aggregate.type,
       object_id: e.aggregate.id,
-      object_sequence: e.aggregate.version,
+      object_sequence: objectSequence(parsed.data, e.aggregate.version),
       data: JSON.stringify(e.data.object),
       previous: e.data.previous ? JSON.stringify(e.data.previous) : null,
       request: e.request ? JSON.stringify(e.request) : null,
@@ -56,19 +65,35 @@ export async function ingest(w: Webhooks, tx: Tx, e: Envelope): Promise<IngestRe
     .executeTakeFirst();
   if (!inserted) return { created: false, deliveries: 0 };
 
-  const r = await sql<{ n: string }>`
-    with ins as (
-      insert into deliveries (id, event_id, endpoint_id, status, next_attempt_at)
-      select gen_random_uuid(), ${inserted.id}::uuid, ep.id, 'pending', now()
-      from webhook_endpoints ep
-      where ep.account_id = ${e.account_id}::uuid and ep.livemode = ${e.livemode}
-        and ep.status = 'enabled' and ep.deleted_at is null
-        and ('*' = any(ep.enabled_events) or ${type} = any(ep.enabled_events))
-      on conflict (event_id, endpoint_id) do nothing
-      returning 1)
-    select count(*)::text as n from ins`.execute(tx);
+  // Delivery ids are UUIDv7 generated here (prefixed `whd_` in the API), one per subscribed endpoint.
+  const targets = await tx
+    .selectFrom("webhook_endpoints")
+    .select("id")
+    .where("account_id", "=", e.account_id)
+    .where("livemode", "=", e.livemode)
+    .where("status", "=", "enabled")
+    .where("deleted_at", "is", null)
+    .where(sql<boolean>`('*' = any(enabled_events) or ${type} = any(enabled_events))`)
+    .orderBy("id")
+    .execute();
+  const created = targets.length
+    ? await tx
+        .insertInto("deliveries")
+        .values(
+          targets.map((ep) => ({
+            id: uuidv7(),
+            event_id: inserted.id,
+            endpoint_id: ep.id,
+            status: "pending" as const,
+            next_attempt_at: sql<Date>`now()`,
+          })),
+        )
+        .onConflict((oc) => oc.columns(["event_id", "endpoint_id"]).doNothing())
+        .returning("id")
+        .execute()
+    : [];
   w.metrics.ingested(type);
-  return { created: true, deliveries: Number(r.rows[0]?.n ?? 0) };
+  return { created: true, deliveries: created.length };
 }
 
 function eventUuid(id: string): string {

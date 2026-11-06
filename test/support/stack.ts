@@ -49,7 +49,12 @@ export interface Stack {
   merchant(): Merchant;
   token(
     m: Merchant,
-    o?: { livemode?: boolean; ptype?: "secret_key" | "restricted_key"; scp?: string[] },
+    o?: {
+      livemode?: boolean;
+      ptype?: "secret_key" | "restricted_key" | "session";
+      scp?: string[];
+      role?: "owner" | "admin" | "developer" | "viewer";
+    },
   ): Promise<string>;
   call(
     method: "GET" | "POST" | "PATCH" | "DELETE",
@@ -134,11 +139,12 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     },
     token: (m, t = {}) =>
       mintTestToken({
-        sub: newId("key"),
+        sub: t.ptype === "session" ? newId("usr") : newId("key"),
         acct: m.account,
         lm: t.livemode ?? false,
         ptype: t.ptype ?? "secret_key",
         scp: t.scp ?? [],
+        ...(t.role ? { role: t.role } : {}),
       }),
     async call(method, path, c = {}) {
       const res = await fetch(`${url}${path}`, {

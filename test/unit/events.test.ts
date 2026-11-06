@@ -4,6 +4,7 @@ import { fromUuid, uuidv7 } from "@nearpay-internal/ids";
 import { SUBJECTS, type Subject } from "@nearpay-internal/spec";
 import { agentPayment, checkoutSession, paymentIntent } from "@nearpay-internal/testing";
 import { describe, expect, it } from "vitest";
+import { objectSequence } from "../../src/app/events.js";
 import { normalizeEnabledEvents, SUBSCRIBABLE, subscribes } from "../../src/domain/endpoint/events.js";
 import { canonicalEvent, pingObject, publicType, renderFor, type StoredEvent } from "../../src/domain/event/render.js";
 
@@ -15,9 +16,22 @@ describe("subscriptions", () => {
     ).toEqual({
       ok: ["payment_intent.succeeded", "agent_payment.failed"],
     });
-    expect(normalizeEnabledEvents(["payment_intent.done"])).toEqual({ unknown: "payment_intent.done" });
+    expect(normalizeEnabledEvents(["payment_intent.done"])).toEqual({ unknown: "payment_intent.done", index: 0 });
     expect(SUBSCRIBABLE).not.toContain("ping");
     expect(SUBSCRIBABLE.length).toBe(WEBHOOK_TYPE_NAMES.length - 1);
+  });
+
+  it("reports the first unknown type with its index, even next to `*` (spec 0.1.5 lets any string through)", () => {
+    expect(normalizeEnabledEvents(["payment_intent.succeeded", "nope", "also.nope"])).toEqual({
+      unknown: "nope",
+      index: 1,
+    });
+    expect(normalizeEnabledEvents(["*", "payment_intent.done"])).toEqual({ unknown: "payment_intent.done", index: 1 });
+    expect(normalizeEnabledEvents(["PAYMENT_INTENT.SUCCEEDED"])).toEqual({
+      unknown: "PAYMENT_INTENT.SUCCEEDED",
+      index: 0,
+    });
+    expect(normalizeEnabledEvents(["*", "*"])).toEqual({ ok: ["*"] });
   });
 
   it("matches types", () => {
@@ -84,6 +98,27 @@ describe("rendering", () => {
     const a = canonicalEvent(row({ type: "agent_payment.settled", data: ap, object_sequence: 2 }), API_VERSION);
     expect((a.data.object as { sequence: number }).sequence).toBe(2);
     expect(Event.safeParse(a).success).toBe(true);
+  });
+
+  it("keeps the producer's own sequence on checkout sessions and agent payments (spec 0.1.5)", () => {
+    const cs = checkoutSession({ status: "complete", sequence: 9 }) as unknown as Record<string, unknown>;
+    const e = canonicalEvent(row({ type: "checkout.session.completed", data: cs, object_sequence: 3 }), API_VERSION);
+    expect((e.data.object as { sequence: number }).sequence).toBe(9);
+    expect(Event.safeParse(e).success).toBe(true);
+    const ap = agentPayment({ sequence: 0 }) as unknown as Record<string, unknown>;
+    const a = canonicalEvent(row({ type: "agent_payment.settled", data: ap, object_sequence: 4 }), API_VERSION);
+    expect((a.data.object as { sequence: number }).sequence).toBe(0);
+  });
+
+  it("stores the object's sequence at ingest, falling back to the aggregate version", () => {
+    expect(objectSequence({ sequence: 9 }, 3)).toBe(9);
+    expect(objectSequence({ sequence: 0 }, 3)).toBe(0);
+    expect(objectSequence({}, 3)).toBe(3);
+    expect(objectSequence({ sequence: null }, 3)).toBe(3);
+    expect(objectSequence({ sequence: -1 }, 3)).toBe(3);
+    expect(objectSequence({ sequence: 1.5 }, 3)).toBe(3);
+    expect(objectSequence({ sequence: "9" }, 3)).toBe(3);
+    expect(objectSequence(null, 3)).toBe(3);
   });
 
   it("keeps ping objects as they are and copies the request", () => {

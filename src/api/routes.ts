@@ -9,6 +9,7 @@ import {
   getEvent as getEventRoute,
   getWebhookEndpoint,
   listEvents as listEventsRoute,
+  listWebhookEndpointDeliveries,
   listWebhookEndpoints,
   listWebhookSigningKeys,
   testWebhookEndpoint,
@@ -17,6 +18,7 @@ import {
 import { toUuid } from "@nearpay-internal/ids";
 import { ApiError, implement, type RequestContext, type RouteBinding, respond } from "@nearpay-internal/service";
 import { type Merchant, need, type Webhooks } from "../app/context.js";
+import { listDeliveries } from "../app/deliveries.js";
 import {
   createEndpoint,
   deleteEndpoint,
@@ -45,6 +47,7 @@ export function webhooksRoutes(w: Webhooks): RouteBinding[] {
       await deleteEndpoint(w, merchant(ctx), ctx.params.id);
       return respond(204, undefined);
     }),
+    implement(listWebhookEndpointDeliveries, async (ctx) => listDeliveries(w, merchant(ctx), ctx.params.id, ctx.query)),
     implement(testWebhookEndpoint, async (ctx) =>
       testEndpoint(w, merchant(ctx), ctx.params.id, { id: ctx.requestId, idempotency_key: ctx.idempotencyKey ?? null }),
     ),
