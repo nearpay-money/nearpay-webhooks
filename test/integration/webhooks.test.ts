@@ -352,6 +352,33 @@ describe("delivery", () => {
     await waitFor(async () => (deliveriesTo(m).length === 2 ? true : null));
   });
 
+  it("keeps the producer's own sequence (spec 0.1.5) instead of the aggregate version", async () => {
+    const m = st.merchant();
+    const { token } = await endpoint(m);
+    const cs = checkoutSession({ status: "expired", sequence: 11 });
+    const e = domainEvent("evt.payments.checkout_session.expired", cs, { accountUuid: m.uuid, version: 5 });
+    await st.publishEvent(e);
+    const ap = agentPayment({ status: "failed", sequence: 0 });
+    await st.publishEvent(domainEvent("evt.agentpay.agent_payment.failed", ap, { accountUuid: m.uuid, version: 2 }));
+    const list = await waitFor(async () => {
+      const r = await st.call("GET", "/v1/events", { token });
+      return r.body.data.length === 2 ? r : null;
+    });
+    const byType = (t: string) => list.body.data.find((x: { type: string }) => x.type === t);
+    expect(byType("checkout.session.expired").data.object).toMatchObject({ id: cs.id, sequence: 11 });
+    expect(byType("agent_payment.failed").data.object).toMatchObject({ id: ap.id, sequence: 0 });
+    const row = await st.admin.db
+      .selectFrom("events")
+      .select("object_sequence")
+      .where("source_event_id", "=", e.id)
+      .executeTakeFirstOrThrow();
+    expect(row.object_sequence).toBe(11);
+    // the delivered payload carries the same sequence
+    const delivered = await waitFor(async () => (deliveriesTo(m).length === 2 ? deliveriesTo(m) : null));
+    const sent = delivered.map((d) => JSON.parse(d.body)).find((b) => b.type === "checkout.session.expired");
+    expect(sent.data.object.sequence).toBe(11);
+  });
+
   it("ingests each domain event once (inbox + source_event_id) and dead-letters invalid ones", async () => {
     const m = st.merchant();
     await endpoint(m, { url: "https://shop.example.com/never-called" }); // the test proxy refuses it

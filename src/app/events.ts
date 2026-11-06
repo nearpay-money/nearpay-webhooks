@@ -22,6 +22,15 @@ export interface IngestResult {
   readonly deliveries: number;
 }
 
+/**
+ * The object's own `sequence` when the producer sends it (spec 0.1.5: CheckoutSession and AgentPayment
+ * carry it too), otherwise the aggregate version of the domain event (producers older than 0.1.5).
+ */
+export function objectSequence(object: unknown, aggregateVersion: number): number {
+  const s = (object as { sequence?: unknown } | null)?.sequence;
+  return typeof s === "number" && Number.isInteger(s) && s >= 0 ? s : aggregateVersion;
+}
+
 /** Turns one domain event into a public event and its deliveries, inside the consumer's transaction. */
 export async function ingest(w: Webhooks, tx: Tx, e: Envelope): Promise<IngestResult> {
   const type = publicType(e.subject);
@@ -45,7 +54,7 @@ export async function ingest(w: Webhooks, tx: Tx, e: Envelope): Promise<IngestRe
       source_event_id: e.id,
       object_type: e.aggregate.type,
       object_id: e.aggregate.id,
-      object_sequence: e.aggregate.version,
+      object_sequence: objectSequence(parsed.data, e.aggregate.version),
       data: JSON.stringify(e.data.object),
       previous: e.data.previous ? JSON.stringify(e.data.previous) : null,
       request: e.request ? JSON.stringify(e.request) : null,
