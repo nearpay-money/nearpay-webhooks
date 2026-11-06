@@ -2,14 +2,14 @@
 
 > Public event log, webhook endpoints, signed delivery with retries, replay and delivery logs.
 
-|                                       |                                                                                       |
-| ------------------------------------- | ------------------------------------------------------------------------------------- |
-| Group                                 | Services                                                                              |
-| Kind                                  | service                                                                               |
+|                                       |                                                                                                            |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Group                                 | Services                                                                                                   |
+| Kind                                  | service                                                                                                    |
 | Ships as                              | image: ghcr.io/nearpay-money/webhooks · routes /v1/events, /v1/webhook_endpoints, /v1/webhook_signing_keys |
-| Owns                                  | Event, WebhookEndpoint, Delivery                                                      |
-| Depends on (published artifacts only) | spec, kit, NATS, Valkey, egress proxy                                                 |
-| First built in                        | Stage 1 (step 1.2)                                                                    |
+| Owns                                  | Event, WebhookEndpoint, Delivery                                                                           |
+| Depends on (published artifacts only) | spec, kit, NATS, Valkey, egress proxy                                                                      |
+| First built in                        | Stage 1 (step 1.2)                                                                                         |
 
 ## Documentation
 
@@ -62,20 +62,20 @@ Integration tests in the cloud workspace: `TESTCONTAINERS_RYUK_DISABLED=true pnp
 
 ## Configuration
 
-| Variable                          | Process          | Default  | Meaning                                                                  |
-| --------------------------------- | ---------------- | -------- | ------------------------------------------------------------------------ |
-| `NP_DB_URL_FILE`                  | all              | —        | app-role database URL (migrate: migrator role)                           |
-| `NP_ENDPOINT_SECRET_KEK_FILE`     | api, dispatcher  | —        | 32-byte KEK: endpoint signing secrets and stored idempotent responses    |
-| `NP_WEBHOOK_SIGNING_KEY_FILE`     | api, dispatcher  | —        | platform Ed25519 key (PKCS#8 PEM): `v1a` signatures and the JWKS         |
-| `NP_WEBHOOK_SIGNING_KID`          | api, dispatcher  | derived  | `kid=`; default `wh-` + 12 hex of SHA-256(raw public key)                 |
-| `NP_JWKS_URL`                     | api              | —        | identity JWKS (request tokens)                                           |
-| `NP_NATS_URL`                     | ingest           | —        | domain events                                                            |
-| `NP_EGRESS_PROXY`                 | dispatcher       | unset    | Smokescreen (`http://egress-proxy:4750`); **required** when `NP_ENV=server` |
-| `NP_VALKEY_URL`                   | dispatcher       | unset    | per-endpoint semaphore across replicas (else 1 in flight per endpoint per replica) |
-| `NP_DELIVERY_TIMEOUT_MS`          | dispatcher       | 10000    | whole attempt, including connect                                          |
-| `NP_MAX_CONCURRENCY_PER_ENDPOINT` | dispatcher       | 5        | deliveries in flight per endpoint                                        |
-| `NP_DISPATCH_CONCURRENCY`         | dispatcher       | 50       | deliveries in flight per dispatcher replica                              |
-| `NP_ENV`                          | all              | `local`  | `local`/`test` allow `localhost`, `*.localhost`, loopback and `merchant-demo` endpoint URLs |
+| Variable                          | Process         | Default | Meaning                                                                                     |
+| --------------------------------- | --------------- | ------- | ------------------------------------------------------------------------------------------- |
+| `NP_DB_URL_FILE`                  | all             | —       | app-role database URL (migrate: migrator role)                                              |
+| `NP_ENDPOINT_SECRET_KEK_FILE`     | api, dispatcher | —       | 32-byte KEK: endpoint signing secrets and stored idempotent responses                       |
+| `NP_WEBHOOK_SIGNING_KEY_FILE`     | api, dispatcher | —       | platform Ed25519 key (PKCS#8 PEM): `v1a` signatures and the JWKS                            |
+| `NP_WEBHOOK_SIGNING_KID`          | api, dispatcher | derived | `kid=`; default `wh-` + 12 hex of SHA-256(raw public key)                                   |
+| `NP_JWKS_URL`                     | api             | —       | identity JWKS (request tokens)                                                              |
+| `NP_NATS_URL`                     | ingest          | —       | domain events                                                                               |
+| `NP_EGRESS_PROXY`                 | dispatcher      | unset   | Smokescreen (`http://egress-proxy:4750`); **required** when `NP_ENV=server`                 |
+| `NP_VALKEY_URL`                   | dispatcher      | unset   | per-endpoint semaphore across replicas (else 1 in flight per endpoint per replica)          |
+| `NP_DELIVERY_TIMEOUT_MS`          | dispatcher      | 10000   | whole attempt, including connect                                                            |
+| `NP_MAX_CONCURRENCY_PER_ENDPOINT` | dispatcher      | 5       | deliveries in flight per endpoint                                                           |
+| `NP_DISPATCH_CONCURRENCY`         | dispatcher      | 50      | deliveries in flight per dispatcher replica                                                 |
+| `NP_ENV`                          | all             | `local` | `local`/`test` allow `localhost`, `*.localhost`, loopback and `merchant-demo` endpoint URLs |
 
 ## Behaviour (Stage 1)
 
