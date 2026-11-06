@@ -99,7 +99,7 @@ function endpointUuid(id: string): string {
 }
 
 /** An endpoint of this account and mode (deleted ones are gone); `lock` for updates. */
-async function own(db: Webhooks["db"] | Tx, m: Merchant, id: string, lock = false): Promise<EndpointRow> {
+export async function own(db: Webhooks["db"] | Tx, m: Merchant, id: string, lock = false): Promise<EndpointRow> {
   let q = db
     .selectFrom("webhook_endpoints")
     .selectAll()

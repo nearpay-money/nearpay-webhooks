@@ -65,19 +65,35 @@ export async function ingest(w: Webhooks, tx: Tx, e: Envelope): Promise<IngestRe
     .executeTakeFirst();
   if (!inserted) return { created: false, deliveries: 0 };
 
-  const r = await sql<{ n: string }>`
-    with ins as (
-      insert into deliveries (id, event_id, endpoint_id, status, next_attempt_at)
-      select gen_random_uuid(), ${inserted.id}::uuid, ep.id, 'pending', now()
-      from webhook_endpoints ep
-      where ep.account_id = ${e.account_id}::uuid and ep.livemode = ${e.livemode}
-        and ep.status = 'enabled' and ep.deleted_at is null
-        and ('*' = any(ep.enabled_events) or ${type} = any(ep.enabled_events))
-      on conflict (event_id, endpoint_id) do nothing
-      returning 1)
-    select count(*)::text as n from ins`.execute(tx);
+  // Delivery ids are UUIDv7 generated here (prefixed `whd_` in the API), one per subscribed endpoint.
+  const targets = await tx
+    .selectFrom("webhook_endpoints")
+    .select("id")
+    .where("account_id", "=", e.account_id)
+    .where("livemode", "=", e.livemode)
+    .where("status", "=", "enabled")
+    .where("deleted_at", "is", null)
+    .where(sql<boolean>`('*' = any(enabled_events) or ${type} = any(enabled_events))`)
+    .orderBy("id")
+    .execute();
+  const created = targets.length
+    ? await tx
+        .insertInto("deliveries")
+        .values(
+          targets.map((ep) => ({
+            id: uuidv7(),
+            event_id: inserted.id,
+            endpoint_id: ep.id,
+            status: "pending" as const,
+            next_attempt_at: sql<Date>`now()`,
+          })),
+        )
+        .onConflict((oc) => oc.columns(["event_id", "endpoint_id"]).doNothing())
+        .returning("id")
+        .execute()
+    : [];
   w.metrics.ingested(type);
-  return { created: true, deliveries: Number(r.rows[0]?.n ?? 0) };
+  return { created: true, deliveries: created.length };
 }
 
 function eventUuid(id: string): string {

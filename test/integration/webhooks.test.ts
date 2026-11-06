@@ -4,8 +4,8 @@
  * deliveries through the proxy; retries, abandonment, endpoint disable (+ outbox event); the events
  * API; ingest idempotency; jobs; the Valkey semaphore; the ops CLI.
  */
-import { createPublicKey, timingSafeEqual, verify } from "node:crypto";
-import { parseSignatureHeader, signedPayload } from "@nearpay/spec";
+import { createPublicKey, randomUUID, timingSafeEqual, verify } from "node:crypto";
+import { parseSignatureHeader, signedPayload, WebhookDelivery } from "@nearpay/spec";
 import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { agentPayment, checkoutSession, domainEvent, expectEvent, paymentIntent } from "@nearpay-internal/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -675,6 +675,248 @@ describe("delivery", () => {
     const row = await st.admin.db.selectFrom("deliveries").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
     expect(row.attempts).toBe(0);
     expect((row.next_attempt_at as Date).getTime()).toBeGreaterThan(Date.now());
+  });
+});
+
+describe("delivery log (GET /v1/webhook_endpoints/{id}/deliveries)", () => {
+  const ids = (r: { body: { data: { id: string }[] } }) => r.body.data.map((d) => d.id);
+
+  it("lists an endpoint's deliveries newest first with cursors, in the spec shape", async () => {
+    const m = st.merchant();
+    const { token, r } = await endpoint(m);
+    const epId = toUuid(r.body.id, "we");
+    const deliveryOf = async (evt: string) =>
+      st.admin.db
+        .selectFrom("deliveries")
+        .selectAll()
+        .where("event_id", "=", toUuid(evt, "evt"))
+        .where("endpoint_id", "=", epId)
+        .executeTakeFirstOrThrow();
+
+    // 1: a ping whose first attempt gets a 500 (failed, retry scheduled)
+    st.receiver.queue({ status: 500, body: "boom" });
+    const p1 = await st.call("POST", `/v1/webhook_endpoints/${r.body.id}/test`, { token, body: {} });
+    await waitFor(async () => ((await deliveryOf(p1.body.id)).status === "failed" ? true : null));
+    // 2: a ping that succeeds
+    const p2 = await st.call("POST", `/v1/webhook_endpoints/${r.body.id}/test`, { token, body: {} });
+    await waitFor(async () => ((await deliveryOf(p2.body.id)).status === "succeeded" ? true : null));
+    // 3: an ingested domain event (delivery id generated at ingest), delivered
+    const pi = paymentIntent({ status: "succeeded", sequence: 2 });
+    const e = domainEvent("evt.payments.payment_intent.succeeded", pi, { accountUuid: m.uuid, version: 2 });
+    await st.publishEvent(e);
+    const ev = await waitFor(() =>
+      st.admin.db.selectFrom("events").selectAll().where("source_event_id", "=", e.id).executeTakeFirst(),
+    );
+    const d3 = await waitFor(async () => {
+      const d = await deliveryOf(fromUuid("evt", ev.id));
+      return d.status === "succeeded" ? d : null;
+    });
+    expect(d3.id[14]).toBe("7"); // UUIDv7, like every other prefixed id
+    // 0: an older delivery with a random (pre-UUIDv7) id, abandoned; and one past the 30-day window
+    const old = await st.admin.db
+      .insertInto("events")
+      .values({
+        id: uuidv7(),
+        account_id: m.uuid,
+        livemode: false,
+        type: "payment_intent.created",
+        source_event_id: uuidv7(),
+        object_type: "payment_intent",
+        object_id: pi.id,
+        object_sequence: 1,
+        data: JSON.stringify(paymentIntent()),
+        created_at: new Date(Date.now() - 3_600_000),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const legacy = randomUUID();
+    await st.admin.db
+      .insertInto("deliveries")
+      .values({
+        id: legacy,
+        event_id: old.id,
+        endpoint_id: epId,
+        status: "abandoned",
+        attempts: 0,
+        last_error: "endpoint disabled for 72 h",
+        created_at: new Date(Date.now() - 3_600_000),
+      })
+      .execute();
+    const ancient = await st.admin.db
+      .insertInto("events")
+      .values({
+        id: uuidv7(),
+        account_id: m.uuid,
+        livemode: false,
+        type: "payment_intent.created",
+        source_event_id: uuidv7(),
+        object_type: "payment_intent",
+        object_id: pi.id,
+        object_sequence: 1,
+        data: JSON.stringify(paymentIntent()),
+        created_at: new Date(Date.now() - 31 * 86_400_000),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await st.admin.db
+      .insertInto("deliveries")
+      .values({
+        id: uuidv7(),
+        event_id: ancient.id,
+        endpoint_id: epId,
+        status: "succeeded",
+        attempts: 1,
+        created_at: new Date(Date.now() - 31 * 86_400_000),
+      })
+      .execute();
+
+    const d1 = fromUuid("whd", (await deliveryOf(p1.body.id)).id);
+    const d2 = fromUuid("whd", (await deliveryOf(p2.body.id)).id);
+    const whd3 = fromUuid("whd", d3.id);
+    const whd0 = fromUuid("whd", legacy);
+    const path = `/v1/webhook_endpoints/${r.body.id}/deliveries`;
+
+    const all = await st.call("GET", path, { token });
+    expect(all.status).toBe(200);
+    expect(all.body).toMatchObject({ object: "list", has_more: false, url: path });
+    expect(ids(all)).toEqual([whd3, d2, d1, whd0]);
+    for (const d of all.body.data) {
+      const parsed = WebhookDelivery.safeParse(d);
+      expect(parsed.success, JSON.stringify(d)).toBe(true);
+    }
+    const [g3, g2, g1, g0] = all.body.data;
+    expect(g3).toMatchObject({
+      object: "webhook_delivery",
+      livemode: false,
+      webhook_endpoint: r.body.id,
+      event: fromUuid("evt", ev.id),
+      event_type: "payment_intent.succeeded",
+      status: "succeeded",
+      attempts: 1,
+      last_status_code: 200,
+      last_error: null,
+      next_attempt_at: null,
+    });
+    expect(g3.succeeded_at).toBeGreaterThanOrEqual(g3.created);
+    expect(g2).toMatchObject({ event: p2.body.id, event_type: "ping", status: "succeeded" });
+    expect(g1).toMatchObject({
+      event: p1.body.id,
+      event_type: "ping",
+      status: "failed",
+      attempts: 1,
+      last_status_code: 500,
+      last_error: "HTTP 500",
+      succeeded_at: null,
+    });
+    expect(g1.next_attempt_at).toBeGreaterThan(Math.floor(Date.now() / 1000) + 30);
+    expect(g0).toMatchObject({
+      status: "abandoned",
+      event_type: "payment_intent.created",
+      attempts: 0,
+      last_status_code: null,
+      last_error: "endpoint disabled for 72 h",
+      next_attempt_at: null,
+      succeeded_at: null,
+    });
+
+    // pages of 2 forward and back
+    const p = await st.call("GET", `${path}?limit=2`, { token });
+    expect(ids(p)).toEqual([whd3, d2]);
+    expect(p.body.has_more).toBe(true);
+    const n = await st.call("GET", `${path}?limit=2&starting_after=${d2}`, { token });
+    expect(ids(n)).toEqual([d1, whd0]);
+    expect(n.body.has_more).toBe(false);
+    const after0 = await st.call("GET", `${path}?limit=2&starting_after=${whd0}`, { token });
+    expect(after0.body).toMatchObject({ data: [], has_more: false });
+    const back = await st.call("GET", `${path}?limit=2&ending_before=${whd0}`, { token });
+    expect(ids(back)).toEqual([d2, d1]);
+    expect(back.body.has_more).toBe(true);
+    const top = await st.call("GET", `${path}?limit=2&ending_before=${d2}`, { token });
+    expect(ids(top)).toEqual([whd3]);
+    expect(top.body.has_more).toBe(false);
+
+    // cursors must be deliveries of this endpoint
+    const bad = await st.call("GET", `${path}?starting_after=${p1.body.id}`, { token });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatchObject({ code: "invalid_request", param: "starting_after" });
+    const other = await endpoint(m);
+    const foreign = await st.call("GET", `/v1/webhook_endpoints/${other.r.body.id}/deliveries?ending_before=${d1}`, {
+      token,
+    });
+    expect(foreign.status).toBe(400);
+    expect(foreign.body.error.param).toBe("ending_before");
+    const none = await st.call("GET", `/v1/webhook_endpoints/${other.r.body.id}/deliveries`, { token });
+    expect(none.body).toMatchObject({ data: [], has_more: false });
+    expect((await st.call("GET", `${path}?limit=0`, { token })).status).toBe(400);
+  });
+
+  it("shows pending deliveries and abandons them when the endpoint is deleted (then 404)", async () => {
+    const m = st.merchant();
+    const { token, r } = await endpoint(m);
+    await st.call("PATCH", `/v1/webhook_endpoints/${r.body.id}`, { token, body: { disabled: true } });
+    const ev = await st.admin.db
+      .insertInto("events")
+      .values({
+        id: uuidv7(),
+        account_id: m.uuid,
+        livemode: false,
+        type: "checkout.session.completed",
+        source_event_id: uuidv7(),
+        object_type: "checkout_session",
+        object_id: "cs_x",
+        object_sequence: 1,
+        data: JSON.stringify(checkoutSession()),
+        created_at: new Date(),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const id = uuidv7();
+    await st.admin.db
+      .insertInto("deliveries")
+      .values({
+        id,
+        event_id: ev.id,
+        endpoint_id: toUuid(r.body.id, "we"),
+        status: "pending",
+        next_attempt_at: new Date(),
+      })
+      .execute();
+    const path = `/v1/webhook_endpoints/${r.body.id}/deliveries`;
+    const list = await st.call("GET", path, { token });
+    expect(list.body.data).toMatchObject([
+      {
+        id: fromUuid("whd", id),
+        event_type: "checkout.session.completed",
+        status: "pending",
+        attempts: 0,
+        last_status_code: null,
+      },
+    ]);
+    expect(list.body.data[0].next_attempt_at).toEqual(expect.any(Number));
+    expect((await st.call("DELETE", `/v1/webhook_endpoints/${r.body.id}`, { token })).status).toBe(204);
+    expect((await st.call("GET", path, { token })).status).toBe(404);
+    const row = await st.admin.db.selectFrom("deliveries").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
+    expect(row).toMatchObject({ status: "abandoned", next_attempt_at: null });
+  });
+
+  it("uses the endpoint read auth: scopes, dashboard roles, account and mode isolation (INV-8)", async () => {
+    const m = st.merchant();
+    const { r } = await endpoint(m);
+    const path = `/v1/webhook_endpoints/${r.body.id}/deliveries`;
+    const call = async (token?: string) => (await st.call("GET", path, token ? { token } : {})).status;
+    expect(await call()).toBe(401);
+    expect(await call(await st.token(m))).toBe(200);
+    expect(await call(await st.token(m, { ptype: "restricted_key", scp: ["webhook_endpoints.read"] }))).toBe(200);
+    expect(await call(await st.token(m, { ptype: "restricted_key", scp: ["webhook_endpoints.write"] }))).toBe(403);
+    expect(await call(await st.token(m, { ptype: "restricted_key", scp: ["events.read"] }))).toBe(403);
+    for (const role of ["owner", "admin", "developer"] as const)
+      expect(await call(await st.token(m, { ptype: "session", role })), role).toBe(200);
+    expect(await call(await st.token(m, { ptype: "session", role: "viewer" }))).toBe(403);
+    expect(await call(await st.token(m, { ptype: "session" }))).toBe(403);
+    expect(await call(await st.token(m, { livemode: true }))).toBe(404);
+    expect(await call(await st.token(st.merchant()))).toBe(404);
+    const missing = await st.call("GET", "/v1/webhook_endpoints/we_nope/deliveries", { token: await st.token(m) });
+    expect(missing.status).toBe(400);
   });
 });
 
