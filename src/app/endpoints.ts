@@ -5,7 +5,8 @@
  * deliveries carry both `v1=` signatures). Every status change, and every rotation, writes a transition row.
  */
 import { API_VERSION, type Event } from "@nearpay/spec";
-import { isId, toUuid, uuidv7 } from "@nearpay-internal/ids";
+import { emit } from "@nearpay-internal/db";
+import { fromUuid, isId, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
 import { normalizeEnabledEvents } from "../domain/endpoint/events.js";
 import { DEFAULT_OVERLAP_SECONDS, previousExpiry, rotateSecret } from "../domain/endpoint/secrets.js";
@@ -286,8 +287,25 @@ export async function rotateEndpointSecret(
       .returningAll()
       .executeTakeFirstOrThrow();
     const expiry = previousExpiry(next, now);
+    const expiresAt = expiry === null ? null : new Date(expiry).toISOString();
     await transition(tx, cur.id, cur.status, cur.status, "secret_rotated", m.actor, {
-      previous_secret_expires_at: expiry === null ? null : new Date(expiry).toISOString(),
+      previous_secret_expires_at: expiresAt,
+    });
+    // spec 0.2.1: notify tells developers/owners; same transaction as the rotation, never the secret
+    await emit(tx, {
+      subject: "evt.webhooks.endpoint.secret_rotated",
+      aggregate: { type: "webhook_endpoint", id: fromUuid("we", cur.id), version: updated.version },
+      accountId: cur.account_id,
+      livemode: cur.livemode,
+      data: {
+        object: {
+          endpoint_id: fromUuid("we", cur.id),
+          account_id: fromUuid("acct", cur.account_id),
+          url: cur.url,
+          previous_secret_expires_at: expiresAt,
+          actor_user_id: m.userId,
+        },
+      },
     });
     return { row: updated, now };
   });

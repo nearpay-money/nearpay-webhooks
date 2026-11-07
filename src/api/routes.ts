@@ -17,7 +17,7 @@ import {
   testWebhookEndpoint,
   updateWebhookEndpoint,
 } from "@nearpay/spec";
-import { toUuid } from "@nearpay-internal/ids";
+import { isId, toUuid } from "@nearpay-internal/ids";
 import { ApiError, implement, type RequestContext, type RouteBinding, respond } from "@nearpay-internal/service";
 import { type Merchant, need, type Webhooks } from "../app/context.js";
 import { listDeliveries } from "../app/deliveries.js";
@@ -38,7 +38,12 @@ import { publicJwk } from "../signing/signer.js";
 export function merchant(ctx: RequestContext): Merchant {
   const p = ctx.principal;
   if (!p?.acct) throw new ApiError("authentication_required");
-  return { account: toUuid(p.acct, "acct"), livemode: ctx.livemode, actor: `${p.ptype}:${p.sub}` };
+  return {
+    account: toUuid(p.acct, "acct"),
+    livemode: ctx.livemode,
+    actor: `${p.ptype}:${p.sub}`,
+    userId: p.ptype === "session" && isId("usr", p.sub) ? p.sub : null,
+  };
 }
 
 export function webhooksRoutes(w: Webhooks): RouteBinding[] {

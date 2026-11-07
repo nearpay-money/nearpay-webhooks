@@ -64,6 +64,8 @@ export interface Merchant {
   readonly livemode: boolean;
   /** `<ptype>:<sub>` of the caller, for transition rows. */
   readonly actor: string;
+  /** `usr_…` of a dashboard session caller; null for API keys (spec 0.2.1 `actor_user_id`). */
+  readonly userId: string | null;
 }
 
 export function need<T>(v: T | null, what: string): T {

@@ -7,7 +7,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { Event, parseSignatureHeader, signedPayload, WebhookDelivery } from "@nearpay/spec";
 import { fromUuid, newId, toUuid, uuidv7 } from "@nearpay-internal/ids";
-import { account, domainEvent, paymentIntent } from "@nearpay-internal/testing";
+import { account, domainEvent, expectEvent, paymentIntent } from "@nearpay-internal/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { webhooksHandlers } from "../../src/consumers/handlers.js";
 import { hmacV1 } from "../../src/signing/signer.js";
@@ -230,6 +230,7 @@ describe("secret rotation (POST /v1/webhook_endpoints/{id}/rotate_secret)", () =
     const m = st.merchant();
     const ep = await endpoint(m);
     const t0 = Math.floor(Date.now() / 1000);
+    const probe = await st.probe("evt.webhooks.endpoint.secret_rotated");
     const r1 = await st.call("POST", `/v1/webhook_endpoints/${ep.id}/rotate_secret`, {
       token: ep.token,
       body: {},
@@ -248,6 +249,26 @@ describe("secret rotation (POST /v1/webhook_endpoints/{id}/rotate_secret)", () =
     });
     expect(replay.headers.get("idempotent-replayed")).toBe("true");
     expect(replay.body).toEqual(r1.body);
+    // spec 0.2.1: one outbox event per rotation (not per replay), never the secret; API key → no user
+    const evt = await expectEvent(probe, "evt.webhooks.endpoint.secret_rotated", {
+      data: { object: { endpoint_id: ep.id } },
+    });
+    expect(evt).toMatchObject({
+      account_id: m.uuid,
+      livemode: false,
+      aggregate: { type: "webhook_endpoint", id: ep.id, version: 1 },
+      data: { object: { account_id: m.account, url: `${st.receiver.url}/hooks/${m.account}`, actor_user_id: null } },
+    });
+    const expires = (evt.data as { object: { previous_secret_expires_at: string } }).object.previous_secret_expires_at;
+    expect(Math.floor(Date.parse(expires) / 1000)).toBe(r1.body.previous_secret_expires_at);
+    expect(JSON.stringify(evt)).not.toContain(r1.body.secret);
+    const outboxed = await st.admin.db
+      .selectFrom("outbox")
+      .select("subject")
+      .where("subject", "=", "evt.webhooks.endpoint.secret_rotated")
+      .where("account_id", "=", m.uuid)
+      .execute();
+    expect(outboxed).toHaveLength(1);
     const stored = await st.admin.db
       .selectFrom("idempotency_keys")
       .select("response_body_enc")
@@ -323,6 +344,24 @@ describe("secret rotation (POST /v1/webhook_endpoints/{id}/rotate_secret)", () =
     expect(t.map((x) => x.cause)).toEqual(["created", "secret_rotated", "secret_rotated", "secret_rotated"]);
     expect(t[1]).toMatchObject({ from_state: "enabled", to_state: "enabled" });
     expect(t[3]?.evidence).toEqual({ previous_secret_expires_at: null });
+  });
+
+  it("names the dashboard user who rotated (actor_user_id) in evt.webhooks.endpoint.secret_rotated", async () => {
+    const m = st.merchant();
+    const ep = await endpoint(m);
+    const session = await st.token(m, { ptype: "session", role: "developer" });
+    const probe = await st.probe("evt.webhooks.endpoint.secret_rotated");
+    const r = await st.call("POST", `/v1/webhook_endpoints/${ep.id}/rotate_secret`, {
+      token: session,
+      body: { expire_previous_in_seconds: 0 },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const evt = await expectEvent(probe, "evt.webhooks.endpoint.secret_rotated", {
+      data: { object: { endpoint_id: ep.id } },
+    });
+    const object = (evt.data as { object: Record<string, unknown> }).object;
+    expect(object.actor_user_id).toMatch(/^usr_/);
+    expect(object.previous_secret_expires_at).toBeNull();
   });
 
   it("rotates disabled endpoints; 404 for deleted, other accounts and modes; validates the overlap; needs write", async () => {

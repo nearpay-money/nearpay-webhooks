@@ -64,8 +64,8 @@ describe("routes and events", () => {
     );
   });
 
-  it("is built against spec 0.2.0: rotate_secret and resend as the LLD describes them", () => {
-    expect(SPEC_VERSION).toBe("0.2.0");
+  it("is built against spec 0.2.1: rotate_secret and resend as the LLD describes them", () => {
+    expect(SPEC_VERSION).toBe("0.2.1");
     expect(rotateWebhookEndpointSecret).toMatchObject({
       method: "POST",
       path: "/v1/webhook_endpoints/{id}/rotate_secret",
@@ -142,7 +142,7 @@ describe("routes and events", () => {
     const produced = (Object.keys(SUBJECTS) as Subject[]).filter(
       (k) => SUBJECTS[k].producer === "webhooks" && SUBJECTS[k].stage <= 2,
     );
-    expect(produced).toEqual(["evt.webhooks.endpoint.disabled"]);
+    expect(produced).toEqual(["evt.webhooks.endpoint.disabled", "evt.webhooks.endpoint.secret_rotated"]);
     const files = (dir: string): string[] =>
       readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? files(join(dir, f)) : [join(dir, f)]));
     const src = files(new URL("../../src", import.meta.url).pathname)
@@ -169,6 +169,34 @@ describe("routes and events", () => {
       },
     };
     expect(envelopeOf("evt.webhooks.endpoint.disabled").safeParse(env).success).toBe(true);
+  });
+
+  it("evt.webhooks.endpoint.secret_rotated (spec 0.2.1) parses for key and session callers, never with a secret", () => {
+    const we = newId("we");
+    const base = {
+      id: uuidv7(),
+      subject: "evt.webhooks.endpoint.secret_rotated",
+      occurred_at: new Date().toISOString(),
+      account_id: uuidv7(),
+      livemode: true,
+      aggregate: { type: "webhook_endpoint", id: we, version: 2 },
+    };
+    const object = {
+      endpoint_id: we,
+      account_id: newId("acct"),
+      url: "https://shop.example.com/hook",
+      previous_secret_expires_at: new Date().toISOString(),
+      actor_user_id: newId("usr"),
+    };
+    const schema = envelopeOf("evt.webhooks.endpoint.secret_rotated");
+    expect(schema.safeParse({ ...base, data: { object } }).success).toBe(true);
+    expect(
+      schema.safeParse({
+        ...base,
+        data: { object: { ...object, previous_secret_expires_at: null, actor_user_id: null } },
+      }).success,
+    ).toBe(true);
+    expect(SUBJECTS["evt.webhooks.endpoint.secret_rotated"].consumers).toEqual(["notify"]);
   });
 });
 
