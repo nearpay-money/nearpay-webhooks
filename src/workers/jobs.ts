@@ -4,6 +4,7 @@
  * | kind                | when           | what                                                          |
  * |---------------------|----------------|---------------------------------------------------------------|
  * | deliveries.abandon  | every 10 min   | undelivered deliveries older than 72 h → abandoned (covers disabled endpoints the dispatcher skips) |
+ * | secrets.expire      | every 10 min   | rotated-out secrets past their overlap are erased (Stage 2)   |
  * | events.purge        | daily 03:00 UTC| events, deliveries and attempts older than 30 days            |
  * | kit.purge           | hourly         | published outbox, old inbox, expired idempotency keys         |
  */
@@ -14,12 +15,14 @@ import { GIVE_UP_AFTER_MS } from "../domain/delivery/schedule.js";
 
 export const ABANDON_JOB = "deliveries.abandon";
 export const PURGE_JOB = "events.purge";
+export const SECRETS_JOB = "secrets.expire";
 
 const HOUR = 3_600_000;
 const BATCH = 5_000;
 
 export const RECURRING: readonly RecurringJob[] = [
   { kind: ABANDON_JOB, everyMs: 10 * 60_000 },
+  { kind: SECRETS_JOB, everyMs: 10 * 60_000 },
   { kind: PURGE_JOB, everyMs: 24 * HOUR, offsetMs: 3 * HOUR },
   { kind: "kit.purge", everyMs: HOUR },
 ];
@@ -35,6 +38,19 @@ export async function abandonExpired(w: Webhooks): Promise<number> {
     })
     .where("status", "in", ["pending", "failed"])
     .where("created_at", "<", new Date(w.now() - GIVE_UP_AFTER_MS))
+    .executeTakeFirst();
+  return Number(r.numUpdatedRows);
+}
+
+/**
+ * Erases previous secrets whose overlap has ended (they no longer sign: the dispatcher and the API
+ * already ignore them; this only stops keeping them, encrypted, longer than needed). Returns how many.
+ */
+export async function expireSecrets(w: Webhooks): Promise<number> {
+  const r = await w.db
+    .updateTable("webhook_endpoints")
+    .set({ secondary_secret_enc: null, secondary_expires_at: null })
+    .where("secondary_expires_at", "<=", new Date(w.now()))
     .executeTakeFirst();
   return Number(r.numUpdatedRows);
 }
@@ -73,6 +89,10 @@ export function jobHandlers(w: Webhooks): Record<string, JobHandler> {
     [ABANDON_JOB]: async () => {
       const n = await abandonExpired(w);
       if (n) w.log.info({ abandoned: n }, "undelivered deliveries abandoned after 72 h");
+    },
+    [SECRETS_JOB]: async () => {
+      const n = await expireSecrets(w);
+      if (n) w.log.info({ erased: n }, "rotated-out endpoint secrets erased after their overlap");
     },
     [PURGE_JOB]: async () => {
       w.log.info(await purgeEvents(w), "events past retention purged");

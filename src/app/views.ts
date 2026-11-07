@@ -9,6 +9,7 @@ import {
 import { fromUuid } from "@nearpay-internal/ids";
 import type { Selectable } from "kysely";
 import type { z } from "zod";
+import { previousExpiry, type SecretState } from "../domain/endpoint/secrets.js";
 import { renderFor } from "../domain/event/render.js";
 import type { DeliveriesTable, EventsTable, WebhookEndpointsTable } from "../infra/db/schema.js";
 
@@ -18,12 +19,27 @@ type WebhookEndpoint = z.infer<typeof Endpoint>;
 type WebhookDelivery = z.infer<typeof Delivery>;
 
 /** A delivery row with what the view needs from its event. */
-export type DeliveryRow = Selectable<DeliveriesTable> & { event_type: string; livemode: boolean };
+export type DeliveryRow = Omit<Selectable<DeliveriesTable>, "resend_no"> & { event_type: string; livemode: boolean };
 
 const unix = (d: Date) => Math.floor(d.getTime() / 1000);
 
-/** The endpoint object; `secret` only in the create response. */
-export function endpointView(row: EndpointRow, secret?: string): WebhookEndpoint {
+/** The stored (encrypted) secrets of an endpoint row as a rotation state. */
+export function secretState(
+  row: Pick<EndpointRow, "secret_enc" | "secondary_secret_enc" | "secondary_expires_at">,
+): SecretState<Buffer> {
+  return {
+    current: row.secret_enc,
+    previous: row.secondary_secret_enc,
+    previousExpiresAt: row.secondary_expires_at?.getTime() ?? null,
+  };
+}
+
+/**
+ * The endpoint object at `now`; `secret` only in the create and rotate responses.
+ * `previous_secret_expires_at` is set while a rotated-out secret still signs (Stage 2), null otherwise.
+ */
+export function endpointView(row: EndpointRow, now: number, secret?: string): WebhookEndpoint {
+  const expiry = previousExpiry(secretState(row), now);
   return {
     id: fromUuid("we", row.id),
     object: "webhook_endpoint",
@@ -36,6 +52,7 @@ export function endpointView(row: EndpointRow, secret?: string): WebhookEndpoint
     status: row.status,
     disabled_reason: row.disabled_reason,
     ...(secret ? { secret } : {}),
+    previous_secret_expires_at: expiry === null ? null : unix(new Date(expiry)),
   };
 }
 

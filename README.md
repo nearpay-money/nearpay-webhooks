@@ -28,15 +28,16 @@ This repo stays surgical: design docs live in [`nearpay-brain`](../nearpay-brain
 ```
 nearpay-webhooks/
 ├── migrations/            0001_webhooks.sql (endpoints, transitions, events, deliveries, attempts)
+│                          0002_stage2_resend_modeless.sql (deliveries.resend_no, events unique per mode)
 ├── src/
 │   ├── api/               spec route bindings
 │   ├── app/               endpoints, events (ingest + API), views, pagination, process wiring
 │   ├── consumers/         domain-event ingest handlers
 │   ├── dispatcher/        claim → sign → POST via egress proxy → record
 │   ├── domain/
-│   │   ├── delivery/      retry schedule, abandonment, endpoint disable (pure)
-│   │   ├── endpoint/      URL/SSRF policy, subscriptions (pure)
-│   │   └── event/         domain → public mapping, version rendering (pure)
+│   │   ├── delivery/      retry schedule, abandonment, endpoint disable, resend planning (pure)
+│   │   ├── endpoint/      URL/SSRF policy, subscriptions, secret rotation window (pure)
+│   │   └── event/         domain → public mapping and objects (reviews, modes), version rendering (pure)
 │   ├── infra/             db schema, egress client (CONNECT / absolute-form), Valkey semaphore
 │   ├── ops/               ops CLI
 │   ├── signing/           HMAC v1 + Ed25519 v1a, secrets, JWKS
@@ -44,7 +45,7 @@ nearpay-webhooks/
 └── test/
     ├── contract/          spec contract (routes, subjects, objects, signature format)
     ├── integration/       Testcontainers (Postgres, NATS, Valkey) + proxy/receiver fixtures
-    ├── property/          fast-check (delivery rules, SSRF)
+    ├── property/          fast-check (delivery rules, SSRF, rotation window, resend uniqueness)
     └── unit/              domain, signing vectors, config
 ```
 
@@ -84,8 +85,14 @@ Integration tests in the cloud workspace: `TESTCONTAINERS_RYUK_DISABLED=true pnp
 - **Ingest** (`webhooks-ingest`): the 11 subjects the catalogue routes to webhooks (checkout sessions, payment intents, agent payments) become one public `Event` each (inbox + `source_event_id` dedupe) and one pending delivery (UUIDv7 id) per enabled endpoint subscribed to the type (`*` or explicit). The object's own `sequence` is kept (spec 0.1.5: checkout sessions and agent payments carry it too); only objects without one (producers older than 0.1.5) get the domain event's aggregate version as `data.object.sequence`. Invalid payloads are dead-lettered.
 - **Dispatch** (`webhooks-dispatcher`): due deliveries are claimed with `FOR UPDATE SKIP LOCKED` and a 60 s lease; ≤ 5 in flight per endpoint (Valkey sorted set `wh:<endpoint>`, 30 s slot expiry); the event is rendered in the endpoint's API version and signed `t=…,v1=<hmac per active secret>,v1a=<ed25519>,kid=…`; POST through the egress proxy (CONNECT + TLS for https, absolute-form for http), timeout 10 s, no redirects, `User-Agent: NearPay-Webhooks/1.0`, `NearPay-Event-Id`, `NearPay-Event-Type`. 2xx → succeeded; otherwise retried after 1 m, 5 m, 30 m, 2 h, 5 h, 10 h, then every 12 h (± 10 %) and abandoned 72 h after creation. An endpoint failing continuously for more than 72 h is disabled (`disabled_reason: failing`) and `evt.webhooks.endpoint.disabled` goes to the outbox (notify emails the owners). Proxy refusals and timeouts are attempts with no status code. Every attempt is logged (`delivery_attempts`: status, duration, error, 500-character response excerpt).
 - **Events API**: `GET /v1/events` (filters `type`, `created[gte/lte]`, cursors) and `GET /v1/events/{id}`, last 30 days; `GET /v1/webhook_signing_keys` (anonymous JWKS).
-- **Jobs** (in `webhooks-ingest`): `deliveries.abandon` every 10 min, `events.purge` daily (30-day retention of events, deliveries, attempts), `kit.purge` hourly.
+- **Jobs** (in `webhooks-ingest`): `deliveries.abandon` every 10 min, `secrets.expire` every 10 min (Stage 2: erases rotated-out secrets after their overlap), `events.purge` daily (30-day retention of events, deliveries, attempts), `kit.purge` hourly.
 - **Metrics**: `nearpay_webhooks_events_ingested_total{type}`, `…_delivery_latency_seconds`, `…_deliveries_total{outcome,code_class}`, `…_endpoints_disabled_total`, `…_due_backlog`, plus the kit set.
+
+## Behaviour (Stage 2, spec 0.2.0)
+
+- **New event types**: `refund.{created,requires_action,pending,succeeded,failed,canceled}` (object `Refund`, its own `sequence` kept), `review.{opened,closed}` (the bus `Review` rendered with the spec's `toPublicReview()` into `PublicReview` at ingest; an execution review without `payment_intent` is not public: no event, no dead letter) and `account.updated` (public `Account`). Identity sends `account.updated` without a mode (`livemode: null`: an account is neither test nor live), so it becomes **one public event per mode**, each delivered to that mode's endpoints and listed by that mode's events API (`events` is unique on `(source_event_id, livemode)`). Any other event without a mode, and any object whose own `livemode` disagrees with the envelope (INV-8), is dead-lettered.
+- **Secret rotation**: `POST /v1/webhook_endpoints/{id}/rotate_secret` `{expire_previous_in_seconds 0–86400, default 86400}` returns the endpoint with the new `secret` (once) and `previous_secret_expires_at`. During the overlap every delivery carries two `v1=` signatures, the new secret first; at the expiry instant the previous secret stops signing; rotating during an overlap replaces the previous secret; `0` drops it at once. Allowed on disabled endpoints. Each rotation writes a `secret_rotated` transition (same status, evidence: the expiry). Reads show `previous_secret_expires_at` (null outside an overlap). The idempotent response is stored encrypted like create's.
+- **Resend**: `POST /v1/events/{id}/resend` `{endpoint?}` → `202 EventResend` with one new `pending` delivery (UUIDv7, fresh schedule and 72 h window) per endpoint: the given one (caller's, same mode — else `404` with `param: endpoint`; enabled — else `409 state_conflict`; subscriptions ignored) or every enabled endpoint subscribed to the type (a `ping` only to the endpoint it tested). Deliveries are unique on `(event_id, endpoint_id, resend_no)`: 0 is the original, each resend takes the next number; the event row is locked so concurrent resends never collide. Events past the 30-day window are `404`.
 
 ## Ops CLI (Stage 1)
 
@@ -93,7 +100,7 @@ Integration tests in the cloud workspace: `TESTCONTAINERS_RYUK_DISABLED=true pnp
 
 ## Status
 
-Stage 1 implemented (step 1.2; spec 0.1.5 in step 1.4): every Stage-1 route of the spec (10, including the delivery log), the 11 consumed subjects, the produced `evt.webhooks.endpoint.disabled`. Stage 2 (refund/account/review events, secret rotation API, resend, per-attempt delivery detail) and Stage 3 (billing events, `GET /v1/events/stream`) are not started; the schema already carries the secondary secret used during rotations and the signer sends both HMACs.
+Stages 1–2 implemented (step 1.2; spec 0.1.5 in step 1.4; spec 0.2.0 in step 2.2): every Stage 1–2 route of the spec (12, including the delivery log, `rotate_secret` and `resend`), the 20 consumed subjects, the produced `evt.webhooks.endpoint.disabled`. Stage 3 (billing events, `GET /v1/events/stream`) is not started.
 
 ## Built with
 
