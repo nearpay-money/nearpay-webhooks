@@ -16,7 +16,9 @@ import { emit, sql } from "@nearpay-internal/db";
 import { fromUuid, uuidv7 } from "@nearpay-internal/ids";
 import { need, secretAad, type Webhooks } from "../app/context.js";
 import { transition } from "../app/endpoints.js";
+import { secretState } from "../app/views.js";
 import { afterAttempt, codeClass, isTerminal } from "../domain/delivery/schedule.js";
+import { activeSecrets } from "../domain/endpoint/secrets.js";
 import { renderFor } from "../domain/event/render.js";
 import type { Egress } from "../infra/egress.js";
 import type { Semaphore } from "../infra/semaphore.js";
@@ -128,9 +130,12 @@ async function attempt(d: Dispatcher, deliveryId: string): Promise<void> {
 
   const cipher = need(w.cipher, "the endpoint secret KEK");
   const key = need(w.signingKey, "the webhook signing key");
-  const secrets = [cipher.decrypt(row.secret_enc, secretAad(row.endpoint_id)).toString("utf8")];
-  if (row.secondary_secret_enc && row.secondary_expires_at && row.secondary_expires_at.getTime() > w.now())
-    secrets.push(cipher.decrypt(row.secondary_secret_enc, secretAad(row.endpoint_id)).toString("utf8"));
+  // One instant for the timestamp `t=` and the choice of secrets: during a rotation overlap the
+  // delivery carries a `v1=` for the current and the previous secret, current first (§5, §6).
+  const startedAt = new Date(w.now());
+  const secrets = activeSecrets(secretState(row), startedAt.getTime()).map((enc) =>
+    cipher.decrypt(enc, secretAad(row.endpoint_id)).toString("utf8"),
+  );
 
   const event = renderFor(
     {
@@ -147,7 +152,6 @@ async function attempt(d: Dispatcher, deliveryId: string): Promise<void> {
     API_VERSION,
   );
   const body = JSON.stringify(event);
-  const startedAt = new Date(w.now());
   const timestamp = Math.floor(startedAt.getTime() / 1000);
   const headers = {
     "content-type": "application/json; charset=utf-8",

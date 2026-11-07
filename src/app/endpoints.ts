@@ -1,19 +1,21 @@
 /**
  * Webhook endpoints (lld/webhooks.md §5): create (secret returned once, stored envelope-encrypted),
- * list, get, update (URL changes re-validated; merchant disable/re-enable), delete, and `test` (a
- * `ping` event delivered to this endpoint only). Every status change writes a transition row.
+ * list, get, update (URL changes re-validated; merchant disable/re-enable), delete, `test` (a `ping`
+ * event delivered to this endpoint only) and, from Stage 2, `rotate_secret` (overlap window during which
+ * deliveries carry both `v1=` signatures). Every status change, and every rotation, writes a transition row.
  */
 import { API_VERSION, type Event } from "@nearpay/spec";
 import { isId, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
 import { normalizeEnabledEvents } from "../domain/endpoint/events.js";
+import { DEFAULT_OVERLAP_SECONDS, previousExpiry, rotateSecret } from "../domain/endpoint/secrets.js";
 import { endpointUrlProblem } from "../domain/endpoint/url.js";
 import { pingObject } from "../domain/event/render.js";
 import type { EndpointStatus } from "../infra/db/schema.js";
 import { newEndpointSecret } from "../signing/signer.js";
 import { type Merchant, need, secretAad, type Tx, type Webhooks } from "./context.js";
 import { type Page, type PageQuery, pageOf } from "./pages.js";
-import { type EndpointRow, endpointView, eventView } from "./views.js";
+import { type EndpointRow, endpointView, eventView, secretState } from "./views.js";
 
 export interface EndpointCreate {
   url: string;
@@ -90,31 +92,37 @@ export async function createEndpoint(w: Webhooks, m: Merchant, body: EndpointCre
     await transition(tx, id, null, "enabled", "created", m.actor);
     return r;
   });
-  return endpointView(row, secret);
+  return endpointView(row, w.now(), secret);
 }
 
-function endpointUuid(id: string): string {
-  if (!isId("we", id)) throw ApiError.missing("webhook_endpoint", id, "id");
+function endpointUuid(id: string, param: string): string {
+  if (!isId("we", id)) throw ApiError.missing("webhook_endpoint", id, param);
   return toUuid(id, "we");
 }
 
 /** An endpoint of this account and mode (deleted ones are gone); `lock` for updates. */
-export async function own(db: Webhooks["db"] | Tx, m: Merchant, id: string, lock = false): Promise<EndpointRow> {
+export async function own(
+  db: Webhooks["db"] | Tx,
+  m: Merchant,
+  id: string,
+  lock = false,
+  param = "id",
+): Promise<EndpointRow> {
   let q = db
     .selectFrom("webhook_endpoints")
     .selectAll()
-    .where("id", "=", endpointUuid(id))
+    .where("id", "=", endpointUuid(id, param))
     .where("account_id", "=", m.account)
     .where("livemode", "=", m.livemode)
     .where("deleted_at", "is", null);
   if (lock) q = q.forUpdate();
   const row = await q.executeTakeFirst();
-  if (!row) throw ApiError.missing("webhook_endpoint", id, "id");
+  if (!row) throw ApiError.missing("webhook_endpoint", id, param);
   return row;
 }
 
 export async function getEndpoint(w: Webhooks, m: Merchant, id: string) {
-  return endpointView(await own(w.db, m, id));
+  return endpointView(await own(w.db, m, id), w.now());
 }
 
 export async function listEndpoints(w: Webhooks, m: Merchant, q: PageQuery) {
@@ -127,7 +135,7 @@ export async function listEndpoints(w: Webhooks, m: Merchant, q: PageQuery) {
   const page: Page<EndpointRow> = await pageOf(base, q, "we", "webhook_endpoints");
   return {
     object: "list" as const,
-    data: page.rows.map((r) => endpointView(r)),
+    data: page.rows.map((r) => endpointView(r, w.now())),
     has_more: page.hasMore,
     url: "/v1/webhook_endpoints",
   };
@@ -176,7 +184,7 @@ export async function updateEndpoint(w: Webhooks, m: Merchant, id: string, body:
       );
     return updated;
   });
-  return endpointView(row);
+  return endpointView(row, w.now());
 }
 
 /** `DELETE /v1/webhook_endpoints/{id}`: soft delete; undelivered events for it are abandoned. */
@@ -240,4 +248,48 @@ export async function testEndpoint(
       .execute();
     return eventView(ev);
   });
+}
+
+/**
+ * `POST /v1/webhook_endpoints/{id}/rotate_secret`: a new secret (returned once); the current one keeps
+ * signing for `expire_previous_in_seconds` (0 drops it at once; a rotation during an overlap replaces
+ * the previous secret). Allowed on a disabled endpoint (a leaked secret must be replaceable). The
+ * idempotent response, which carries the secret, is stored encrypted by the service bootstrap.
+ */
+export async function rotateEndpointSecret(
+  w: Webhooks,
+  m: Merchant,
+  id: string,
+  body: { expire_previous_in_seconds?: number | undefined },
+) {
+  const cipher = need(w.cipher, "the endpoint secret KEK");
+  const secret = newEndpointSecret();
+  const { row, now } = await w.db.transaction().execute(async (tx) => {
+    const cur = await own(tx, m, id, true);
+    const now = w.now();
+    const next = rotateSecret(
+      secretState(cur),
+      cipher.encrypt(secret, secretAad(cur.id)),
+      body.expire_previous_in_seconds ?? DEFAULT_OVERLAP_SECONDS,
+      now,
+    );
+    const updated = await tx
+      .updateTable("webhook_endpoints")
+      .set({
+        secret_enc: next.current,
+        secondary_secret_enc: next.previous,
+        secondary_expires_at: next.previousExpiresAt === null ? null : new Date(next.previousExpiresAt),
+        updated_at: new Date(now),
+        version: cur.version + 1,
+      })
+      .where("id", "=", cur.id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    const expiry = previousExpiry(next, now);
+    await transition(tx, cur.id, cur.status, cur.status, "secret_rotated", m.actor, {
+      previous_secret_expires_at: expiry === null ? null : new Date(expiry).toISOString(),
+    });
+    return { row: updated, now };
+  });
+  return endpointView(row, now, secret);
 }

@@ -1,5 +1,5 @@
 /**
- * Spec route bindings (lld/webhooks.md §5, Stage 1). Authentication, scopes, session roles and automatic
+ * Spec route bindings (lld/webhooks.md §5, Stages 1–2). Authentication, scopes, session roles and automatic
  * idempotency (POSTs with `Idempotency-Key`; responses stored envelope-encrypted because the create
  * response carries the signing secret) are enforced from the spec by the service bootstrap.
  */
@@ -12,6 +12,8 @@ import {
   listWebhookEndpointDeliveries,
   listWebhookEndpoints,
   listWebhookSigningKeys,
+  resendEvent as resendEventRoute,
+  rotateWebhookEndpointSecret,
   testWebhookEndpoint,
   updateWebhookEndpoint,
 } from "@nearpay/spec";
@@ -24,10 +26,12 @@ import {
   deleteEndpoint,
   getEndpoint,
   listEndpoints,
+  rotateEndpointSecret,
   testEndpoint,
   updateEndpoint,
 } from "../app/endpoints.js";
 import { getEvent, listEvents } from "../app/events.js";
+import { resendEvent } from "../app/resend.js";
 import { publicJwk } from "../signing/signer.js";
 
 /** The account principal of a merchant route (secret/restricted key or dashboard session). */
@@ -51,6 +55,10 @@ export function webhooksRoutes(w: Webhooks): RouteBinding[] {
     implement(testWebhookEndpoint, async (ctx) =>
       testEndpoint(w, merchant(ctx), ctx.params.id, { id: ctx.requestId, idempotency_key: ctx.idempotencyKey ?? null }),
     ),
+    implement(rotateWebhookEndpointSecret, async (ctx) =>
+      rotateEndpointSecret(w, merchant(ctx), ctx.params.id, ctx.body),
+    ),
+    implement(resendEventRoute, async (ctx) => resendEvent(w, merchant(ctx), ctx.params.id, ctx.body)),
     implement(listEventsRoute, async (ctx) => listEvents(w, merchant(ctx), ctx.query)),
     implement(getEventRoute, async (ctx) => getEvent(w, merchant(ctx), ctx.params.id)),
     implement(listWebhookSigningKeys, async () => ({

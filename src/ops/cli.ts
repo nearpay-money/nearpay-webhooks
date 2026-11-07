@@ -100,7 +100,7 @@ async function run(
       ]);
       return {
         endpoint: {
-          ...endpointView(row),
+          ...endpointView(row, w.now()),
           account: fromUuid("acct", row.account_id),
           last_success_at: row.last_success_at,
           failing_since: row.failing_since,
@@ -160,7 +160,7 @@ async function run(
           .forUpdate()
           .executeTakeFirst();
         if (!cur || cur.deleted_at) throw ApiError.missing("webhook_endpoint", args[0] as string);
-        if (cur.status === "enabled") return { endpoint: endpointView(cur), changed: false };
+        if (cur.status === "enabled") return { endpoint: endpointView(cur, w.now()), changed: false };
         const row = await tx
           .updateTable("webhook_endpoints")
           .set({
@@ -174,7 +174,7 @@ async function run(
           .returningAll()
           .executeTakeFirstOrThrow();
         await transition(tx, id, cur.status, "enabled", "ops_enabled", "ops:cli");
-        return { endpoint: endpointView(row), changed: true };
+        return { endpoint: endpointView(row, w.now()), changed: true };
       });
     }
     case "backlog": {

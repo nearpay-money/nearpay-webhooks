@@ -131,7 +131,7 @@ describe("webhook endpoints", () => {
     const ok = await endpoint(m, { enabled_events: ["payment_intent.succeeded"] });
     const upd = await st.call("PATCH", `/v1/webhook_endpoints/${ok.r.body.id}`, {
       token: ok.token,
-      body: { enabled_events: ["payment_intent.succeeded", "refund.created"] },
+      body: { enabled_events: ["payment_intent.succeeded", "invoice.paid"] }, // a Stage 3 type, unknown in spec 0.2.0
     });
     expect(upd.status).toBe(400);
     expect(upd.body.error).toMatchObject({ code: "event_type_unknown", param: "enabled_events[1]" });

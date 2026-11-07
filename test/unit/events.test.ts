@@ -46,7 +46,11 @@ describe("domain → public mapping", () => {
     const routed = (Object.keys(SUBJECTS) as Subject[]).filter((s) =>
       (SUBJECTS[s].consumers as readonly string[]).includes("webhooks"),
     );
-    expect(routed.length).toBe(11);
+    // Stage 1: 11 payments/agentpay subjects; Stage 2: 6 refunds, account.updated, review.{opened,closed}
+    expect(routed.length).toBe(20);
+    expect(publicType("evt.payments.refund.pending")).toBe("refund.pending");
+    expect(publicType("evt.identity.account.updated")).toBe("account.updated");
+    expect(publicType("evt.compliance.review.closed")).toBe("review.closed");
     for (const s of routed) expect(publicType(s), s).toBe(SUBJECT_TO_WEBHOOK_TYPE[s]);
     for (const s of ["evt.rails.execution.settled", "evt.payments.payment_intent.expired", "toString", "evt.x.y.z"])
       expect(publicType(s), s).toBeNull();
