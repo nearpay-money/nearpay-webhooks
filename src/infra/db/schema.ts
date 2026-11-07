@@ -1,4 +1,4 @@
-/** Kysely table types (migrations/0001_webhooks.sql). */
+/** Kysely table types (migrations/0001_webhooks.sql, 0002_stage2_resend_modeless.sql). */
 import type { ColumnType, KitTables } from "@nearpay-internal/db";
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -68,6 +68,8 @@ export interface DeliveriesTable {
   id: string;
   event_id: string;
   endpoint_id: string;
+  /** 0: the delivery made at ingest (or by `…/test`); 1, 2, …: resends of the event to this endpoint. */
+  resend_no: Def<number>;
   status: DeliveryStatus;
   attempts: Def<number>;
   next_attempt_at: OptTimestamp;
