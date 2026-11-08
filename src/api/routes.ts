@@ -1,5 +1,5 @@
 /**
- * Spec route bindings (lld/webhooks.md §5, Stages 1–2). Authentication, scopes, session roles and automatic
+ * Spec route bindings (lld/webhooks.md §5, Stages 1–3; Stage 3: `streamEvents` §5.1). Authentication, scopes, session roles and automatic
  * idempotency (POSTs with `Idempotency-Key`; responses stored envelope-encrypted because the create
  * response carries the signing secret) are enforced from the spec by the service bootstrap.
  */
@@ -14,6 +14,7 @@ import {
   listWebhookSigningKeys,
   resendEvent as resendEventRoute,
   rotateWebhookEndpointSecret,
+  streamEvents as streamEventsRoute,
   testWebhookEndpoint,
   updateWebhookEndpoint,
 } from "@nearpay/spec";
@@ -32,7 +33,9 @@ import {
 } from "../app/endpoints.js";
 import { getEvent, listEvents } from "../app/events.js";
 import { resendEvent } from "../app/resend.js";
+import { type Streams, startEventStream } from "../app/stream.js";
 import { publicJwk } from "../signing/signer.js";
+import { openEventStream, resumeCursor } from "./sse.js";
 
 /** The account principal of a merchant route (secret/restricted key or dashboard session). */
 export function merchant(ctx: RequestContext): Merchant {
@@ -46,7 +49,7 @@ export function merchant(ctx: RequestContext): Merchant {
   };
 }
 
-export function webhooksRoutes(w: Webhooks): RouteBinding[] {
+export function webhooksRoutes(w: Webhooks, streams?: Streams): RouteBinding[] {
   return [
     implement(createWebhookEndpoint, async (ctx) => createEndpoint(w, merchant(ctx), ctx.body)),
     implement(listWebhookEndpoints, async (ctx) => listEndpoints(w, merchant(ctx), ctx.query)),
@@ -66,6 +69,16 @@ export function webhooksRoutes(w: Webhooks): RouteBinding[] {
     implement(resendEventRoute, async (ctx) => resendEvent(w, merchant(ctx), ctx.params.id, ctx.body)),
     implement(listEventsRoute, async (ctx) => listEvents(w, merchant(ctx), ctx.query)),
     implement(getEventRoute, async (ctx) => getEvent(w, merchant(ctx), ctx.params.id)),
+    implement(streamEventsRoute, async (ctx) => {
+      const caller = { ...merchant(ctx), ptype: ctx.principal?.ptype ?? "" };
+      await startEventStream(
+        w,
+        need(streams ?? null, "the events stream"),
+        caller,
+        { types: ctx.query.types, cursor: resumeCursor(ctx.headers, ctx.query.starting_after) },
+        (limits) => openEventStream(ctx, limits),
+      );
+    }),
     implement(listWebhookSigningKeys, async () => ({
       keys: [publicJwk(need(w.signingKey, "the webhook signing key"))],
     })),

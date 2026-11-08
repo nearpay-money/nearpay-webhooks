@@ -1,5 +1,5 @@
 /**
- * Contract (foundations §16): every Stage 1–2 webhooks route is bound (and nothing else); every subject
+ * Contract (foundations §16): every Stage 1–3 webhooks route is bound (and nothing else); every subject
  * the catalogue routes to webhooks is handled; the subject webhooks produces is emitted with a payload
  * the catalogue accepts; the objects webhooks serves and delivers parse with the spec schemas; the
  * signature header is the spec format.
@@ -19,6 +19,7 @@ import {
   rotateWebhookEndpointSecret,
   SPEC_VERSION,
   SUBJECT_TO_WEBHOOK_TYPE,
+  streamEvents,
   updateWebhookEndpoint,
   WEBHOOK_TYPE_NAMES,
   WEBHOOK_TYPES,
@@ -44,28 +45,33 @@ import { INGESTED, webhooksHandlers } from "../../src/consumers/handlers.js";
 import { publicObjectOf } from "../../src/domain/event/public.js";
 import { pingObject } from "../../src/domain/event/render.js";
 import { newEndpointSecret, signatureHeader, signingKeyFromSeed } from "../../src/signing/signer.js";
-import { refund, review } from "../support/fixtures.js";
+import { invoice, refund, review, subscription } from "../support/fixtures.js";
 
 const ALL = [...PUBLIC_ROUTES, ...INTERNAL_ROUTES];
 
 describe("routes and events", () => {
-  it("binds every Stage 1–2 webhooks route, and nothing else", () => {
+  it("binds every Stage 1–3 webhooks route (Stage 3: the events stream), and nothing else", () => {
     const bindings = webhooksRoutes({} as never);
     expect(unimplementedRoutes("webhooks", ALL, bindings).map((r) => r.id)).toEqual([]);
     expect(bindings.map((b) => b.route.id).sort()).toEqual(
-      ALL.filter((r) => r.service === "webhooks" && r.stage <= 2)
+      ALL.filter((r) => r.service === "webhooks" && r.stage <= 3)
         .map((r) => r.id)
         .sort(),
     );
-    expect(bindings).toHaveLength(12);
+    expect(bindings).toHaveLength(13);
+    // the stream: frames ready/event/reset, heartbeat 15 s, retry 3 s, the errors the service raises
+    expect(streamEvents.stream).toMatchObject({ heartbeatSeconds: 15, retryMs: 3000 });
+    expect(Object.keys(streamEvents.stream?.events ?? {}).sort()).toEqual(["event", "ready", "reset"]);
+    expect(streamEvents.errors).toEqual(expect.arrayContaining(["event_type_unknown", "livemode_forbidden"]));
+    expect(streamEvents.auth).toEqual(["secret_key", "restricted_key:events.read", "session"]);
     expect(bindings.map((b) => b.route.id)).toContain("listWebhookEndpointDeliveries");
     expect(bindings.map((b) => b.route.id)).toEqual(
       expect.arrayContaining(["rotateWebhookEndpointSecret", "resendEvent"]),
     );
   });
 
-  it("is built against spec 0.2.1: rotate_secret and resend as the LLD describes them", () => {
-    expect(SPEC_VERSION).toBe("0.2.1");
+  it("is built against spec 0.3.0: rotate_secret and resend as the LLD describes them", () => {
+    expect(SPEC_VERSION).toBe("0.3.0");
     expect(rotateWebhookEndpointSecret).toMatchObject({
       method: "POST",
       path: "/v1/webhook_endpoints/{id}/rotate_secret",
@@ -109,11 +115,11 @@ describe("routes and events", () => {
     }
   });
 
-  it("handles every subject the catalogue routes to webhooks (payments, agentpay, identity, compliance), each with a public type", () => {
+  it("handles every subject the catalogue routes to webhooks (payments, agentpay, identity, compliance, billing), each with a public type", () => {
     const handlers = webhooksHandlers({} as never, {} as never);
     expect(unhandledSubjects("webhooks", handlers)).toEqual([]);
     expect(Object.keys(handlers).sort()).toEqual([...INGESTED].sort());
-    expect(INGESTED).toHaveLength(20);
+    expect(INGESTED).toHaveLength(32);
     expect(INGESTED).toEqual(
       expect.arrayContaining([
         "evt.payments.refund.created",
@@ -125,8 +131,21 @@ describe("routes and events", () => {
         "evt.identity.account.updated",
         "evt.compliance.review.opened",
         "evt.compliance.review.closed",
+        "evt.billing.invoice.created",
+        "evt.billing.invoice.finalized",
+        "evt.billing.invoice.sent",
+        "evt.billing.invoice.paid",
+        "evt.billing.invoice.payment_failed",
+        "evt.billing.invoice.overdue",
+        "evt.billing.invoice.voided",
+        "evt.billing.invoice.marked_uncollectible",
+        "evt.billing.subscription.created",
+        "evt.billing.subscription.updated",
+        "evt.billing.subscription.deleted",
+        "evt.billing.subscription.renewal_upcoming",
       ]),
     );
+    expect(INGESTED).not.toContain("evt.billing.invoice.reminder");
     for (const s of INGESTED) {
       expect(SUBJECTS[s].consumers).toContain("webhooks");
       expect(SUBJECT_TO_WEBHOOK_TYPE[s], s).toBeDefined();
@@ -231,6 +250,9 @@ const objects: Record<string, () => Record<string, unknown>> = {
   account: () => account() as unknown as Record<string, unknown>,
   // stored as rendered at ingest (toPublicReview)
   review: () => (publicObjectOf("review.opened", review(), false) as { ok: Record<string, unknown> }).ok,
+  // stage 3 — billing (`customer.subscription.*` carries a Subscription)
+  invoice: () => invoice() as unknown as Record<string, unknown>,
+  customer: () => subscription() as unknown as Record<string, unknown>,
 };
 
 describe("objects", () => {
@@ -296,6 +318,7 @@ describe("objects", () => {
         previous: kind === "ping" ? null : { status: "open" },
         request: null,
         created_at: now,
+        inserted_at: now,
       };
       const r = Event.safeParse(eventView(row));
       expect(r.success, `${type}: ${r.success ? "" : r.error.issues[0]?.message}`).toBe(true);

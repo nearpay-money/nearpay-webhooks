@@ -16,6 +16,7 @@ const readFile = (p: string) => {
   return v;
 };
 const base = {
+  NP_ENV: "test",
   NP_DB_URL_FILE: "/run/secrets/db",
   NP_ENDPOINT_SECRET_KEK_FILE: "/run/secrets/kek",
   NP_WEBHOOK_SIGNING_KEY_FILE: "/run/secrets/key",
@@ -41,9 +42,9 @@ describe("configuration", () => {
         readFile,
       }),
     ).toThrow(/NP_ENDPOINT_SECRET_KEK: secrets are read from files/);
-    expect(() => loadConfig(ingestShape, { env: { NP_DB_URL_FILE: "/run/secrets/db" }, readFile })).toThrow(
-      /NP_NATS_URL: is required/,
-    );
+    expect(() =>
+      loadConfig(ingestShape, { env: { NP_ENV: "test", NP_DB_URL_FILE: "/run/secrets/db" }, readFile }),
+    ).toThrow(/NP_NATS_URL: is required/);
     // the api ignores dispatcher-only settings; plain values stay plain (no shared secret schema)
     expect(loadConfig(apiShape, { env: { ...base, NP_WEBHOOK_SIGNING_KID: "wh-1" }, readFile }).webhookSigningKid).toBe(
       "wh-1",

@@ -8,7 +8,11 @@
  * - Modes: a domain event carries its mode, except mode-less objects (`account.updated`: an account is
  *   neither test nor live; identity sends `livemode: null`), which become one public event per mode so
  *   test-mode and live-mode endpoints both receive them. Any other event without a mode is refused.
- * - INV-8: an object that states its own `livemode` must agree with the envelope's.
+ * - INV-8: an object that states its own `livemode` must agree with the envelope's, and so must every
+ *   object nested in it (Stage 3: a subscription's item prices carry their own `livemode`).
+ * - Stage 3 invoices (`invoice.*`): `hosted_invoice_url` embeds the invoice secret and is always null on
+ *   the bus (`InvoiceEvent`); a domain invoice that carries one is refused (dead letter) so the secret
+ *   can never reach a public event, a webhook delivery or the events stream.
  */
 import { WEBHOOK_TYPES, type WebhookType } from "@nearpay/spec";
 import { Review, toPublicReview } from "@nearpay-internal/spec";
@@ -32,6 +36,33 @@ const firstIssue = (e: { issues: readonly { message: string; path: readonly Prop
   return i ? `${i.path.map(String).join(".") || "(root)"}: ${i.message}` : "invalid";
 };
 
+/** Public types whose object is an `Invoice` (Stage 3 billing). */
+export const INVOICE_TYPES: ReadonlySet<WebhookType> = new Set<WebhookType>(
+  (Object.keys(WEBHOOK_TYPES) as WebhookType[]).filter((t) => t.startsWith("invoice.")),
+);
+
+/** Path of the first nested `livemode` (the object's own included) that disagrees with `livemode`, or null. */
+export function livemodeConflict(value: unknown, livemode: boolean, path = ""): string | null {
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const c = livemodeConflict(value[i], livemode, `${path}[${i}]`);
+      if (c !== null) return c;
+    }
+    return null;
+  }
+  if (value === null || typeof value !== "object") return null;
+  for (const [k, v] of Object.entries(value)) {
+    const at = path ? `${path}.${k}` : k;
+    if (k === "livemode") {
+      if (typeof v === "boolean" && v !== livemode) return at;
+      continue;
+    }
+    const c = livemodeConflict(v, livemode, at);
+    if (c !== null) return c;
+  }
+  return null;
+}
+
 /** The public object of a domain event's `data.object` in one mode. */
 export function publicObjectOf(type: WebhookType, object: unknown, livemode: boolean): PublicObject {
   let candidate: unknown = object;
@@ -44,8 +75,10 @@ export function publicObjectOf(type: WebhookType, object: unknown, livemode: boo
   }
   const parsed = WEBHOOK_TYPES[type].object.safeParse(candidate);
   if (!parsed.success) return { invalid: `data.object is not a valid ${type} object: ${firstIssue(parsed.error)}` };
-  const own = (candidate as { livemode?: unknown }).livemode;
-  if (typeof own === "boolean" && own !== livemode)
-    return { invalid: `data.object.livemode (${own}) disagrees with the envelope (${livemode})` };
+  if (INVOICE_TYPES.has(type) && (candidate as { hosted_invoice_url?: unknown }).hosted_invoice_url != null)
+    return { invalid: "data.object.hosted_invoice_url must be null on the bus (it embeds the invoice secret)" };
+  const conflict = livemodeConflict(candidate, livemode);
+  if (conflict !== null)
+    return { invalid: `data.object.${conflict} disagrees with the envelope (livemode ${livemode})` };
   return { ok: candidate as Record<string, unknown> };
 }

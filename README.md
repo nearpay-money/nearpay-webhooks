@@ -29,23 +29,26 @@ This repo stays surgical: design docs live in [`nearpay-brain`](../nearpay-brain
 nearpay-webhooks/
 ├── migrations/            0001_webhooks.sql (endpoints, transitions, events, deliveries, attempts)
 │                          0002_stage2_resend_modeless.sql (deliveries.resend_no, events unique per mode)
+│                          0004_event_stream.sql (events.inserted_at + events_stream index, Stage 3)
 ├── src/
-│   ├── api/               spec route bindings
-│   ├── app/               endpoints, events (ingest + API), views, pagination, process wiring
+│   ├── api/               spec route bindings; sse.ts = kit SSE adapter of the events stream
+│   ├── app/               endpoints, events (ingest + API), events stream, views, pagination, process wiring
 │   ├── consumers/         domain-event ingest handlers
 │   ├── dispatcher/        claim → sign → POST via egress proxy → record
 │   ├── domain/
 │   │   ├── delivery/      retry schedule, abandonment, endpoint disable, resend planning (pure)
 │   │   ├── endpoint/      URL/SSRF policy, subscriptions, secret rotation window (pure)
-│   │   └── event/         domain → public mapping and objects (reviews, modes), version rendering (pure)
-│   ├── infra/             db schema, egress client (CONNECT / absolute-form), Valkey semaphore
+│   │   ├── event/         domain → public mapping and objects (reviews, modes, invoices), version rendering (pure)
+│   │   └── stream/        events stream: types filter, resume outcome, settle-window tail (pure)
+│   ├── infra/             db schema, egress client (CONNECT / absolute-form), Valkey semaphore and stream
+│   │                      slots, Postgres LISTEN hub
 │   ├── ops/               ops CLI
 │   ├── signing/           HMAC v1 + Ed25519 v1a, secrets, JWKS
 │   └── workers/           jobs (abandon sweep, retention purge, kit purge)
 └── test/
     ├── contract/          spec contract (routes, subjects, objects, signature format)
     ├── integration/       Testcontainers (Postgres, NATS, Valkey) + proxy/receiver fixtures
-    ├── property/          fast-check (delivery rules, SSRF, rotation window, resend uniqueness)
+    ├── property/          fast-check (delivery rules, SSRF, rotation window, resend uniqueness, stream tail)
     └── unit/              domain, signing vectors, config
 ```
 

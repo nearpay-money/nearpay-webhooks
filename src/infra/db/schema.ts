@@ -1,4 +1,4 @@
-/** Kysely table types (migrations/0001_webhooks.sql, 0002_stage2_resend_modeless.sql). */
+/** Kysely table types (migrations/0001_webhooks.sql, 0002_stage2_resend_modeless.sql, 0004_event_stream.sql). */
 import type { ColumnType, KitTables } from "@nearpay-internal/db";
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -62,6 +62,8 @@ export interface EventsTable {
   previous: OptJson<Record<string, unknown>>;
   request: OptJson<RequestJson>;
   created_at: ColumnType<Date, Date | string, Date | string>;
+  /** Insert instant (Stage 3, migration 0004): the events stream's settle window. */
+  inserted_at: ColumnType<Date, never, never>;
 }
 
 export interface DeliveriesTable {
