@@ -44,7 +44,7 @@ import { INGESTED, webhooksHandlers } from "../../src/consumers/handlers.js";
 import { publicObjectOf } from "../../src/domain/event/public.js";
 import { pingObject } from "../../src/domain/event/render.js";
 import { newEndpointSecret, signatureHeader, signingKeyFromSeed } from "../../src/signing/signer.js";
-import { refund, review } from "../support/fixtures.js";
+import { invoice, refund, review, subscription } from "../support/fixtures.js";
 
 const ALL = [...PUBLIC_ROUTES, ...INTERNAL_ROUTES];
 
@@ -109,11 +109,11 @@ describe("routes and events", () => {
     }
   });
 
-  it("handles every subject the catalogue routes to webhooks (payments, agentpay, identity, compliance), each with a public type", () => {
+  it("handles every subject the catalogue routes to webhooks (payments, agentpay, identity, compliance, billing), each with a public type", () => {
     const handlers = webhooksHandlers({} as never, {} as never);
     expect(unhandledSubjects("webhooks", handlers)).toEqual([]);
     expect(Object.keys(handlers).sort()).toEqual([...INGESTED].sort());
-    expect(INGESTED).toHaveLength(20);
+    expect(INGESTED).toHaveLength(32);
     expect(INGESTED).toEqual(
       expect.arrayContaining([
         "evt.payments.refund.created",
@@ -125,8 +125,21 @@ describe("routes and events", () => {
         "evt.identity.account.updated",
         "evt.compliance.review.opened",
         "evt.compliance.review.closed",
+        "evt.billing.invoice.created",
+        "evt.billing.invoice.finalized",
+        "evt.billing.invoice.sent",
+        "evt.billing.invoice.paid",
+        "evt.billing.invoice.payment_failed",
+        "evt.billing.invoice.overdue",
+        "evt.billing.invoice.voided",
+        "evt.billing.invoice.marked_uncollectible",
+        "evt.billing.subscription.created",
+        "evt.billing.subscription.updated",
+        "evt.billing.subscription.deleted",
+        "evt.billing.subscription.renewal_upcoming",
       ]),
     );
+    expect(INGESTED).not.toContain("evt.billing.invoice.reminder");
     for (const s of INGESTED) {
       expect(SUBJECTS[s].consumers).toContain("webhooks");
       expect(SUBJECT_TO_WEBHOOK_TYPE[s], s).toBeDefined();
@@ -231,6 +244,9 @@ const objects: Record<string, () => Record<string, unknown>> = {
   account: () => account() as unknown as Record<string, unknown>,
   // stored as rendered at ingest (toPublicReview)
   review: () => (publicObjectOf("review.opened", review(), false) as { ok: Record<string, unknown> }).ok,
+  // stage 3 — billing (`customer.subscription.*` carries a Subscription)
+  invoice: () => invoice() as unknown as Record<string, unknown>,
+  customer: () => subscription() as unknown as Record<string, unknown>,
 };
 
 describe("objects", () => {

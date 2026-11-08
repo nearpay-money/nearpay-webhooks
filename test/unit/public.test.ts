@@ -1,12 +1,22 @@
-/** Domain → public objects of the Stage 2 types (lld/webhooks.md §4): refunds, reviews, account.updated. */
-import { API_VERSION, Event, PublicReview, Refund } from "@nearpay/spec";
+/**
+ * Domain → public objects (lld/webhooks.md §4): Stage 2 refunds, reviews, account.updated; Stage 3 billing
+ * invoices and subscriptions.
+ */
+import { API_VERSION, Event, PublicReview, Refund, SUBJECT_TO_WEBHOOK_TYPE, WEBHOOK_TYPES } from "@nearpay/spec";
 import { newId, uuidv7 } from "@nearpay-internal/ids";
+import { InvoiceEvent, SUBJECTS } from "@nearpay-internal/spec";
 import { account } from "@nearpay-internal/testing";
 import { describe, expect, it } from "vitest";
 import { objectSequence } from "../../src/app/events.js";
-import { ingestModes, MODELESS_TYPES, publicObjectOf } from "../../src/domain/event/public.js";
-import { canonicalEvent } from "../../src/domain/event/render.js";
-import { refund, review } from "../support/fixtures.js";
+import {
+  INVOICE_TYPES,
+  ingestModes,
+  livemodeConflict,
+  MODELESS_TYPES,
+  publicObjectOf,
+} from "../../src/domain/event/public.js";
+import { canonicalEvent, publicType } from "../../src/domain/event/render.js";
+import { invoice, refund, review, subscription } from "../support/fixtures.js";
 
 describe("modes", () => {
   it("keeps the envelope's mode; only mode-less types without one go to both modes", () => {
@@ -36,7 +46,7 @@ describe("refunds", () => {
       invalid: expect.stringMatching(/not a valid refund.created object: amount/),
     });
     expect(publicObjectOf("refund.succeeded", refund({ livemode: false }), true)).toMatchObject({
-      invalid: expect.stringMatching(/livemode \(false\) disagrees with the envelope \(true\)/),
+      invalid: expect.stringMatching(/data\.object\.livemode disagrees with the envelope \(livemode true\)/),
     });
   });
 });
@@ -119,5 +129,100 @@ describe("rendering of the Stage 2 types", () => {
       expect(r.success, `${c.type}: ${r.success ? "" : r.error.issues[0]?.message}`).toBe(true);
     }
     expect(Refund.safeParse(refund()).success).toBe(true);
+  });
+});
+
+describe("Stage 3 billing types", () => {
+  const INVOICE_EVENTS = [
+    "created",
+    "finalized",
+    "sent",
+    "paid",
+    "payment_failed",
+    "overdue",
+    "voided",
+    "marked_uncollectible",
+  ] as const;
+  const SUBSCRIPTION_EVENTS = ["created", "updated", "deleted", "renewal_upcoming"] as const;
+
+  it("maps the 12 billing subjects to invoice.* and customer.subscription.*, never invoice.reminder", () => {
+    for (const e of INVOICE_EVENTS) expect(publicType(`evt.billing.invoice.${e}`)).toBe(`invoice.${e}`);
+    for (const e of SUBSCRIPTION_EVENTS)
+      expect(publicType(`evt.billing.subscription.${e}`)).toBe(`customer.subscription.${e}`);
+    expect(publicType("evt.billing.invoice.reminder")).toBeNull();
+    expect(publicType("evt.billing.mandate.activated")).toBeNull(); // Stage 4
+    const billing = Object.keys(SUBJECT_TO_WEBHOOK_TYPE).filter((s) => s.startsWith("evt.billing."));
+    expect(billing).toHaveLength(12);
+    for (const s of billing) expect(SUBJECTS[s as keyof typeof SUBJECTS].consumers).toContain("webhooks");
+    expect([...INVOICE_TYPES].sort()).toEqual(INVOICE_EVENTS.map((e) => `invoice.${e}`).sort());
+  });
+
+  it("passes a bus InvoiceEvent through as the public Invoice in its mode, keeping its sequence", () => {
+    for (const e of INVOICE_EVENTS) {
+      const inv = invoice({ livemode: true, sequence: 4 });
+      expect(InvoiceEvent.safeParse(inv).success).toBe(true);
+      const p = publicObjectOf(`invoice.${e}`, inv, true);
+      expect(p, e).toEqual({ ok: inv });
+      expect(objectSequence((p as { ok: unknown }).ok, 1)).toBe(4);
+    }
+  });
+
+  it("refuses an invoice that carries its hosted URL (the invoice secret never leaves billing)", () => {
+    const leaked = { ...invoice(), hosted_invoice_url: "https://pay.nearpay.money/i/in_x#secret" };
+    expect(publicObjectOf("invoice.finalized", leaked, false)).toEqual({
+      invalid: "data.object.hosted_invoice_url must be null on the bus (it embeds the invoice secret)",
+    });
+    expect(publicObjectOf("invoice.paid", invoice({ livemode: false }), true)).toMatchObject({
+      invalid: expect.stringMatching(/livemode disagrees/),
+    });
+    expect(publicObjectOf("invoice.paid", { ...invoice(), total: -1 }, false)).toMatchObject({
+      invalid: expect.stringMatching(/not a valid invoice.paid object: total/),
+    });
+  });
+
+  it("passes subscriptions through; a nested price in the other mode is refused (INV-8)", () => {
+    for (const e of SUBSCRIPTION_EVENTS) {
+      const sub = subscription({ livemode: true });
+      expect(publicObjectOf(`customer.subscription.${e}`, sub, true)).toEqual({ ok: sub });
+    }
+    const sub = subscription({ livemode: true });
+    const mixed = { ...sub, items: [{ ...sub.items[0], price: { ...sub.items[0]?.price, livemode: false } }] };
+    expect(publicObjectOf("customer.subscription.updated", mixed, true)).toEqual({
+      invalid: "data.object.items[0].price.livemode disagrees with the envelope (livemode true)",
+    });
+  });
+
+  it("renders every billing type as a spec Event", () => {
+    const types = Object.keys(WEBHOOK_TYPES).filter((t) => t.startsWith("invoice.") || t.startsWith("customer."));
+    expect(types).toHaveLength(12);
+    for (const type of types) {
+      const data = type.startsWith("invoice.") ? invoice({ sequence: 2 }) : subscription({ sequence: 2 });
+      const e = canonicalEvent(
+        {
+          id: uuidv7(),
+          type,
+          livemode: false,
+          object_sequence: 2,
+          data: data as unknown as Record<string, unknown>,
+          previous: type.endsWith(".updated") ? { status: "trialing" } : null,
+          request: null,
+          created_at: new Date(),
+        },
+        API_VERSION,
+      );
+      const r = Event.safeParse(e);
+      expect(r.success, `${type}: ${r.success ? "" : r.error.issues[0]?.message}`).toBe(true);
+    }
+  });
+});
+
+describe("livemodeConflict", () => {
+  it("finds the first nested livemode that disagrees, ignoring non-boolean values", () => {
+    expect(livemodeConflict({ livemode: true }, true)).toBeNull();
+    expect(livemodeConflict({ livemode: "no" }, true)).toBeNull();
+    expect(livemodeConflict({ a: [{ b: { livemode: false } }] }, true)).toBe("a[0].b.livemode");
+    expect(livemodeConflict([{ livemode: true }, { livemode: false }], true)).toBe("[1].livemode");
+    expect(livemodeConflict(null, true)).toBeNull();
+    expect(livemodeConflict("x", false)).toBeNull();
   });
 });
