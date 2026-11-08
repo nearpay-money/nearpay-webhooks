@@ -15,6 +15,7 @@ import { pingObject } from "../domain/event/render.js";
 import type { EndpointStatus } from "../infra/db/schema.js";
 import { newEndpointSecret } from "../signing/signer.js";
 import { type Merchant, need, secretAad, type Tx, type Webhooks } from "./context.js";
+import { notifyEvents } from "./events.js";
 import { type Page, type PageQuery, pageOf } from "./pages.js";
 import { type EndpointRow, endpointView, eventView, secretState } from "./views.js";
 
@@ -247,6 +248,7 @@ export async function testEndpoint(
       .insertInto("deliveries")
       .values({ id: uuidv7(), event_id: ev.id, endpoint_id: ep.id, status: "pending", next_attempt_at: now })
       .execute();
+    await notifyEvents(tx, m.account, m.livemode); // `nearpay listen` shows pings (§5.1)
     return eventView(ev);
   });
 }

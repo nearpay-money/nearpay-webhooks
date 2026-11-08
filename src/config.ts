@@ -22,7 +22,14 @@ const signing = () => ({
     .optional(),
 });
 
-export const apiShape = { ...baseConfigShape, dbUrl: dbUrl(), ...kek(), ...signing() };
+export const apiShape = {
+  ...baseConfigShape,
+  dbUrl: dbUrl(),
+  ...kek(),
+  ...signing(),
+  /** Events-stream concurrency across replicas (§5.1); without it, 5 streams per account and mode per replica. */
+  valkeyUrl: url(["redis:", "rediss:"]).optional(),
+};
 
 export const ingestShape = { ...baseConfigShape, dbUrl: dbUrl(), natsUrl: url(["nats:", "tls:"]) };
 

@@ -1,6 +1,7 @@
 /**
  * Process wiring (lld/webhooks.md §2):
- * - `api`         endpoints, events and signing-key routes, with automatic idempotency (2 replicas)
+ * - `api`         endpoints, events, events stream (Stage 3) and signing-key routes, with automatic
+ *                 idempotency (2 replicas)
  * - `ingest`      domain-event consumers, the outbox relay and the jobs (1 replica)
  * - `dispatcher`  signed deliveries through the egress proxy (2 replicas)
  */
@@ -39,13 +40,23 @@ import type { ApiConfig, DispatcherConfig, IngestConfig, OpsConfig } from "../co
 import { deadLetters, webhooksHandlers } from "../consumers/handlers.js";
 import { type Dispatcher, dispatcherTask, dueBacklog } from "../dispatcher/dispatcher.js";
 import type { Env } from "../domain/endpoint/url.js";
+import { MAX_STREAMS, SLOT_TTL_MS } from "../domain/stream/tail.js";
 import { MIGRATIONS_DIR } from "../infra/db/migrations.js";
 import type { DB } from "../infra/db/schema.js";
 import { type Egress, egressClient } from "../infra/egress.js";
+import { pgNotifyHub } from "../infra/notify-hub.js";
 import { type Semaphore, valkeySemaphore } from "../infra/semaphore.js";
+import { type StreamSlots, valkeyStreamSlots } from "../infra/stream-slots.js";
 import { loadSigningKey, type WebhookSigningKey } from "../signing/signer.js";
 import { jobHandlers, RECURRING } from "../workers/jobs.js";
 import { noMetrics, type Webhooks, webhooksMetrics } from "./context.js";
+import {
+  DEFAULT_STREAM_SETTINGS,
+  noStreamMetrics,
+  type StreamSettings,
+  type Streams,
+  streamMetrics,
+} from "./stream.js";
 
 export interface ServiceDeps {
   database?: Database<DB>;
@@ -100,22 +111,46 @@ function attach(b: Built, service: Service, deps: ServiceDeps) {
   });
 }
 
-export function createApi(config: ApiConfig, deps: ServiceDeps = {}): { service: Service; webhooks: Webhooks } {
+export interface ApiDeps extends ServiceDeps {
+  /** Events-stream tuning (tests shorten the settle window, poll and limits). */
+  streamSettings?: Partial<StreamSettings>;
+  streamSlots?: StreamSlots;
+}
+
+export function createApi(
+  config: ApiConfig,
+  deps: ApiDeps = {},
+): { service: Service; webhooks: Webhooks; streams: Streams } {
   const b = build(config, deps, "api", {
     kek: config.endpointSecretKek,
     signingKey: config.webhookSigningKey,
     kid: config.webhookSigningKid,
   });
-  const service = createService({
+  let service: Service | null = null;
+  const hub = pgNotifyHub(b.database.pool, (e) =>
+    service?.log.warn({ err: e instanceof Error ? e.message : String(e) }, "events LISTEN connection failed"),
+  );
+  const slots = deps.streamSlots ?? valkeyStreamSlots(config.valkeyUrl, MAX_STREAMS, SLOT_TTL_MS, b.w.now);
+  const streams: Streams = {
+    slots,
+    hub,
+    metrics: noStreamMetrics,
+    settings: { ...DEFAULT_STREAM_SETTINGS, ...deps.streamSettings },
+    draining: () => service?.draining ?? false,
+  };
+  service = createService({
     name: "webhooks",
     config,
     ...(deps.keys ? { keys: deps.keys } : {}),
-    routes: webhooksRoutes(b.w),
+    routes: webhooksRoutes(b.w, streams),
     idempotency: idempotencyStore(b.database.db, b.w.cipher as EnvelopeCipher),
     readiness: readiness(b),
   });
   attach(b, service, deps);
-  return { service, webhooks: b.w };
+  streams.metrics = streamMetrics(service.metrics);
+  service.addBackground(hub.task);
+  if (!deps.streamSlots) service.onShutdown(() => slots.close());
+  return { service, webhooks: b.w, streams };
 }
 
 export interface IngestDeps extends ServiceDeps {

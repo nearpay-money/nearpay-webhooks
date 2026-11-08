@@ -14,6 +14,17 @@ import type { Merchant, Tx, Webhooks } from "./context.js";
 import { type Page, type PageQuery, pageOf } from "./pages.js";
 import { type EventRow, eventView } from "./views.js";
 
+/** Postgres channel that wakes the events streams of a mode (§5.1): `events_true` / `events_false`. */
+export const notifyChannel = (livemode: boolean) => `events_${livemode}`;
+
+/**
+ * Wakes the account's event streams once this transaction commits (`pg_notify` is delivered at commit,
+ * never for a rolled-back insert). Only a latency hint: streams poll anyway (§5.1).
+ */
+export async function notifyEvents(tx: Tx, account: string, livemode: boolean): Promise<void> {
+  await sql`select pg_notify(${notifyChannel(livemode)}, ${account})`.execute(tx);
+}
+
 /** Events (and their deliveries) are kept this long (§3). */
 export const RETENTION_DAYS = 30;
 
@@ -86,6 +97,7 @@ export async function ingest(w: Webhooks, tx: Tx, e: Envelope): Promise<IngestRe
       .executeTakeFirst();
     if (!inserted) continue;
     events++;
+    await notifyEvents(tx, e.account_id, livemode);
 
     // Delivery ids are UUIDv7 generated here (prefixed `whd_` in the API), one per subscribed endpoint.
     const targets = await tx

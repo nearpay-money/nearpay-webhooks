@@ -22,6 +22,7 @@ import {
 } from "@nearpay-internal/testing";
 import type { Webhooks } from "../../src/app/context.js";
 import { createApi, createDispatcher, createIngest } from "../../src/app/services.js";
+import type { StreamSettings, Streams } from "../../src/app/stream.js";
 import type { DispatcherConfig } from "../../src/config.js";
 import type { Dispatcher } from "../../src/dispatcher/dispatcher.js";
 import { MIGRATIONS_DIR } from "../../src/infra/db/migrations.js";
@@ -40,7 +41,10 @@ export interface Stack {
   readonly valkey: Started | null;
   readonly admin: Database<DB>;
   readonly url: string;
-  readonly api: { service: Service; webhooks: Webhooks };
+  readonly api: { service: Service; webhooks: Webhooks; streams: Streams };
+  /** The api config (with its port), to start more replicas against the same database and Valkey. */
+  readonly apiConfig: Parameters<typeof createApi>[0];
+  readonly appDbUrl: string;
   readonly ingest: { service: Service; webhooks: Webhooks };
   readonly dispatcher: { service: Service; webhooks: Webhooks; dispatcher: Dispatcher };
   readonly proxy: TestProxy;
@@ -69,6 +73,8 @@ export interface Stack {
 
 export interface StackOptions {
   valkey?: boolean;
+  /** Events-stream tuning for the api (§5.1). */
+  stream?: Partial<StreamSettings>;
   dispatcher?: Partial<DispatcherConfig>;
 }
 
@@ -97,7 +103,12 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
   const keys = { endpointSecretKek: randomBytes(32).toString("base64"), webhookSigningKey: pem };
   const db = (app: string) => createDb<DB>({ url: appUrl, applicationName: `webhooks-${app}-test` });
 
-  const api = createApi({ ...base, ...keys }, { keys: testKeySource(), database: db("api") });
+  const apiConfig = { ...base, ...keys, ...(valkey ? { valkeyUrl: valkey.url } : {}) };
+  const api = createApi(apiConfig, {
+    keys: testKeySource(),
+    database: db("api"),
+    ...(o.stream ? { streamSettings: o.stream } : {}),
+  });
   const { port } = await api.service.start();
   const ingest = await createIngest({ ...base, natsUrl: nats.url }, { database: db("ingest"), tickMs: 50 });
   await ingest.service.start();
@@ -128,6 +139,8 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     admin,
     url,
     api,
+    apiConfig,
+    appDbUrl: appUrl,
     ingest,
     dispatcher,
     proxy,
