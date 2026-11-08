@@ -70,8 +70,8 @@ describe("routes and events", () => {
     );
   });
 
-  it("is built against spec 0.3.0: rotate_secret and resend as the LLD describes them", () => {
-    expect(SPEC_VERSION).toBe("0.3.0");
+  it("is built against spec 0.3.1: rotate_secret and resend as the LLD describes them", () => {
+    expect(SPEC_VERSION).toBe("0.3.1");
     expect(rotateWebhookEndpointSecret).toMatchObject({
       method: "POST",
       path: "/v1/webhook_endpoints/{id}/rotate_secret",
