@@ -19,7 +19,14 @@ import {
   updateWebhookEndpoint,
 } from "@nearpay/spec";
 import { isId, toUuid } from "@nearpay-internal/ids";
-import { ApiError, implement, type RequestContext, type RouteBinding, respond } from "@nearpay-internal/service";
+import {
+  ApiError,
+  implement,
+  type RequestContext,
+  type RouteBinding,
+  respond,
+  resumeCursor,
+} from "@nearpay-internal/service";
 import { type Merchant, need, type Webhooks } from "../app/context.js";
 import { listDeliveries } from "../app/deliveries.js";
 import {
@@ -35,7 +42,6 @@ import { getEvent, listEvents } from "../app/events.js";
 import { resendEvent } from "../app/resend.js";
 import { type Streams, startEventStream } from "../app/stream.js";
 import { publicJwk } from "../signing/signer.js";
-import { openEventStream, resumeCursor } from "./sse.js";
 
 /** The account principal of a merchant route (secret/restricted key or dashboard session). */
 export function merchant(ctx: RequestContext): Merchant {
@@ -76,7 +82,7 @@ export function webhooksRoutes(w: Webhooks, streams?: Streams): RouteBinding[] {
         need(streams ?? null, "the events stream"),
         caller,
         { types: ctx.query.types, cursor: resumeCursor(ctx.headers, ctx.query.starting_after) },
-        (limits) => openEventStream(ctx, limits),
+        (limits) => ctx.sse(limits),
       );
     }),
     implement(listWebhookSigningKeys, async () => ({

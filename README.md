@@ -31,7 +31,7 @@ nearpay-webhooks/
 │                          0002_stage2_resend_modeless.sql (deliveries.resend_no, events unique per mode)
 │                          0004_event_stream.sql (events.inserted_at + events_stream index, Stage 3)
 ├── src/
-│   ├── api/               spec route bindings; sse.ts = kit SSE adapter of the events stream
+│   ├── api/               spec route bindings (the events stream opens kit `ctx.sse(limits)`)
 │   ├── app/               endpoints, events (ingest + API), events stream, views, pagination, process wiring
 │   ├── consumers/         domain-event ingest handlers
 │   ├── dispatcher/        claim → sign → POST via egress proxy → record

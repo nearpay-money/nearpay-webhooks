@@ -1,61 +1,51 @@
-/** Events stream adapters (lld/webhooks.md §5.1): kit SSE adapter, per-replica slots, LISTEN hub dispatch. */
+/**
+ * Events stream infrastructure (lld/webhooks.md §5.1): the kit SSE stream the route opens with
+ * `ctx.sse(limits)` (kit ≥ 0.3.1: limits, slow-reader destroy, `drain()`), per-replica slots, LISTEN hub
+ * dispatch.
+ */
 import { EventEmitter } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { RequestContext, SseStream } from "@nearpay-internal/service";
+import { openSse, resumeCursor, type SseLimits } from "@nearpay-internal/service";
 import { describe, expect, it } from "vitest";
-import { openEventStream, resumeCursor } from "../../src/api/sse.js";
+import type { EventStreamSink } from "../../src/app/stream.js";
 import { type ListenPool, pgNotifyHub, pollingOnlyHub } from "../../src/infra/notify-hub.js";
 import { localStreamSlots, valkeyStreamSlots } from "../../src/infra/stream-slots.js";
 
+/** A response whose client reads nothing unless the test says so. */
 class FakeRes extends EventEmitter {
   writableLength = 0;
   writableNeedDrain = false;
   destroyed = false;
+  ended = false;
+  writes: string[] = [];
+  writeHead() {
+    return this;
+  }
+  write(chunk: string) {
+    this.writes.push(chunk);
+    return true;
+  }
+  end() {
+    this.ended = true;
+    this.emit("close");
+  }
   destroy() {
     this.destroyed = true;
+    this.emit("close");
   }
 }
 
-function fakeCtx(heartbeatSeconds = 0.02) {
+const any = { safeParse: (data: unknown) => ({ success: true as const, data }) };
+
+/** What the route does: `ctx.sse(limits)` → kit `openSse` on the raw response. */
+function open(limits: SseLimits, heartbeatSeconds = 0.02): { s: EventStreamSink; res: FakeRes } {
   const res = new FakeRes();
-  const listeners: (() => void)[] = [];
-  let closed = false;
-  let resolveDone: () => void = () => {};
-  const done = new Promise<void>((r) => {
-    resolveDone = r;
-  });
-  const sent: unknown[] = [];
-  const sse: SseStream = {
-    send(event, data, id) {
-      if (closed) return false;
-      sent.push({ event, data, id });
-      return true;
-    },
-    close() {
-      if (closed) return;
-      closed = true;
-      for (const fn of listeners.splice(0)) fn();
-      res.emit("close");
-      resolveDone();
-    },
-    get closed() {
-      return closed;
-    },
-    done,
-    onClose(fn) {
-      if (closed) fn();
-      else listeners.push(fn);
-    },
-  };
-  const ctx = {
-    sse: () => sse,
-    reply: { raw: res },
-    route: { stream: { heartbeatSeconds } },
-  } as unknown as RequestContext<never>;
-  return { ctx, res, sse, sent };
+  const def = { heartbeatSeconds, retryMs: 3000, events: { ready: any, event: any, reset: any } };
+  const s = openSse(res as never, def as never, {}, limits) as EventStreamSink;
+  return { s, res };
 }
 
-describe("resumeCursor (kit 0.3.0 semantics)", () => {
+describe("resumeCursor (kit)", () => {
   it("prefers Last-Event-ID over starting_after and ignores blanks", () => {
     expect(resumeCursor({ "last-event-id": "evt_a" }, "evt_b")).toBe("evt_a");
     expect(resumeCursor({ "last-event-id": "  " }, "evt_b")).toBe("evt_b");
@@ -65,41 +55,47 @@ describe("resumeCursor (kit 0.3.0 semantics)", () => {
   });
 });
 
-describe("openEventStream (kit 0.3.0 limits on kit 0.2.1)", () => {
+describe("kit event stream with the stream's limits", () => {
   it("passes frames through and closes after maxDurationMs", async () => {
-    const { ctx, sent } = fakeCtx();
-    const s = openEventStream(ctx, { maxDurationMs: 30 });
+    const { s, res } = open({ maxDurationMs: 30 });
     expect(s.send("ready", { x: 1 })).toBe(true);
-    expect(sent).toHaveLength(1);
+    expect(res.writes.some((w) => w.includes("event: ready"))).toBe(true);
     await s.done;
     expect(s.closed).toBe(true);
+    expect(res.ended).toBe(true);
     expect(s.send("event", {}, "evt_1")).toBe(false);
   });
 
-  it("closes a client that stays slow, keeps one that catches up", async () => {
-    const slow = fakeCtx();
-    const a = openEventStream(slow.ctx, { maxBufferedBytes: 10, slowClientMs: 40 });
+  it("closes (destroys) a client that stays slow, keeps one that catches up", async () => {
+    const slow = open({ maxBufferedBytes: 10, slowClientMs: 40 });
     slow.res.writableLength = 100;
-    expect(a.buffered).toBe(100);
+    expect(slow.s.buffered).toBe(100);
     await sleep(150);
-    expect(a.closed).toBe(true);
+    expect(slow.s.closed).toBe(true);
     expect(slow.res.destroyed).toBe(true);
 
-    const ok = fakeCtx();
-    const b = openEventStream(ok.ctx, { maxBufferedBytes: 10, slowClientMs: 80 });
+    const ok = open({ maxBufferedBytes: 10, slowClientMs: 80 });
     ok.res.writableLength = 100;
     await sleep(40);
     ok.res.writableLength = 0;
     await sleep(120);
-    expect(b.closed).toBe(false);
-    b.close();
-    expect(b.closed).toBe(true);
+    expect(ok.s.closed).toBe(false);
+    ok.s.close();
+    expect(ok.s.closed).toBe(true);
     expect(ok.res.destroyed).toBe(false);
+    expect(ok.res.ended).toBe(true);
+  });
+
+  it("a close with more than maxBufferedBytes unsent (duration, shutdown) destroys instead of ending", async () => {
+    const { s, res } = open({ maxBufferedBytes: 10, maxDurationMs: 30 }, 10);
+    res.writableLength = 100;
+    await s.done;
+    expect(res.destroyed).toBe(true);
+    expect(res.ended).toBe(false);
   });
 
   it("drain waits only after a write that needs draining: resolves on drain or on close", async () => {
-    const { ctx, res } = fakeCtx(10);
-    const s = openEventStream(ctx, {});
+    const { s, res } = open({}, 10);
     await s.drain();
     res.writableLength = 5; // queued below the high-water mark: no 'drain' will come
     await s.drain();

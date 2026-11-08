@@ -17,9 +17,8 @@
  * Streamed events are not deliveries: nothing is signed, retried or written.
  */
 import { fromUuid, toUuid } from "@nearpay-internal/ids";
-import { ApiError, type ServiceMetrics } from "@nearpay-internal/service";
+import { ApiError, type ServiceMetrics, type SseLimits, type SseStream } from "@nearpay-internal/service";
 import { sql } from "kysely";
-import type { EventStreamSink, SseLimits } from "../api/sse.js";
 import {
   MAX_BUFFERED_BYTES,
   MAX_DURATION_MS,
@@ -38,6 +37,10 @@ import type { NotifyHub } from "../infra/notify-hub.js";
 import type { StreamSlots } from "../infra/stream-slots.js";
 import type { Merchant, Webhooks } from "./context.js";
 import { RETENTION_DAYS } from "./events.js";
+
+/** The kit stream of `streamEvents` (kit ≥ 0.3.1: limits, `buffered`, `drain()`, destroy of slow readers). */
+export type EventStreamSink = SseStream<"ready" | "event" | "reset">;
+
 import { type EventRow, eventView } from "./views.js";
 
 export type CloseReason = "client" | "max_duration" | "slow_client" | "shutdown" | "error";
