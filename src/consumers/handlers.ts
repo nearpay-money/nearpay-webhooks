@@ -1,6 +1,6 @@
 /**
  * Ingest consumers (lld/webhooks.md §4, §6), run by `webhooks-ingest`: every subject the event catalogue
- * routes to webhooks (Stages 1–3) becomes a public event plus one pending delivery per subscribed
+ * routes to webhooks (Stages 1–4) becomes a public event plus one pending delivery per subscribed
  * endpoint, in the inbox transaction of the domain event (duplicates are skipped twice over: inbox and
  * `events (source_event_id, livemode)`). Reviews are rendered with `toPublicReview` (not public → no
  * event); `account.updated` (identity sends no mode) becomes one event per mode.
@@ -21,8 +21,12 @@
  * |   marked_uncollectible}                           |                                 |
  * | evt.billing.subscription.{created,updated,        | customer.subscription.<same>   |
  * |   deleted,renewal_upcoming}                       |   (Stage 3)                     |
+ * | evt.billing.mandate.{activated,collected,         | mandate.<same>   (Stage 4;      |
+ * |   insufficient_funds,canceled,exhausted,updated,  |   public Mandate)               |
+ * |   unlinked,released}                              |                                 |
  *
- * `evt.billing.invoice.reminder` is notify-only (no public type); mandates arrive with Stage 4.
+ * `evt.billing.invoice.reminder` is notify-only (no public type); `evt.rails.vault.event` is billing's
+ * input (no public type).
  */
 import type { Envelope, EventHandler } from "@nearpay-internal/bus";
 import { deadLetterSink, inboxHandler, type Kysely } from "@nearpay-internal/db";
@@ -33,9 +37,9 @@ import { publicType } from "../domain/event/render.js";
 import type { DB } from "../infra/db/schema.js";
 
 /** Stage this build implements. */
-export const STAGE = 3;
+export const STAGE = 4;
 
-/** Catalogue subjects consumed by webhooks (Stages 1–3). */
+/** Catalogue subjects consumed by webhooks (Stages 1–4). */
 export const INGESTED: readonly Subject[] = (Object.keys(SUBJECTS) as Subject[]).filter(
   (s) => (SUBJECTS[s].consumers as readonly string[]).includes("webhooks") && SUBJECTS[s].stage <= STAGE,
 );

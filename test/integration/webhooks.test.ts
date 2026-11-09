@@ -131,7 +131,7 @@ describe("webhook endpoints", () => {
     const ok = await endpoint(m, { enabled_events: ["payment_intent.succeeded"] });
     const upd = await st.call("PATCH", `/v1/webhook_endpoints/${ok.r.body.id}`, {
       token: ok.token,
-      body: { enabled_events: ["payment_intent.succeeded", "mandate.activated"] }, // a Stage 4 type, unknown in spec 0.3.0
+      body: { enabled_events: ["payment_intent.succeeded", "mandate.renewed"] }, // not a type in spec 0.4.0
     });
     expect(upd.status).toBe(400);
     expect(upd.body.error).toMatchObject({ code: "event_type_unknown", param: "enabled_events[1]" });
@@ -139,6 +139,8 @@ describe("webhook endpoints", () => {
     expect(kept.body.enabled_events).toEqual(["payment_intent.succeeded"]);
     const billing = await endpoint(m, { enabled_events: ["invoice.paid", "customer.subscription.deleted"] }); // Stage 3
     expect(billing.r.status).toBe(201);
+    const mandates = await endpoint(m, { enabled_events: ["mandate.activated", "mandate.released"] }); // Stage 4
+    expect(mandates.r.status).toBe(201);
     // request validation still bounds the items
     const long = await endpoint(m, { enabled_events: ["x".repeat(101)] });
     expect(long.r.body.error.code).toBe("invalid_request");

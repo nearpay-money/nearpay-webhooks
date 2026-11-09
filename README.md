@@ -103,7 +103,7 @@ Integration tests in the cloud workspace: `TESTCONTAINERS_RYUK_DISABLED=true pnp
 
 ## Status
 
-Stages 1–2 implemented (step 1.2; spec 0.1.5 in step 1.4; spec 0.2.0 in step 2.2): every Stage 1–2 route of the spec (12, including the delivery log, `rotate_secret` and `resend`), the 20 consumed subjects, the produced `evt.webhooks.endpoint.disabled`. Stage 3 (billing events, `GET /v1/events/stream`) is not started.
+Stages 1–2 implemented (step 1.2; spec 0.1.5 in step 1.4; spec 0.2.0 in step 2.2): every Stage 1–2 route of the spec (12, including the delivery log, `rotate_secret` and `resend`), the 20 consumed subjects, the produced `evt.webhooks.endpoint.disabled`. Stage 3 (step 3.2, spec 0.3.0): billing events (`invoice.*`, `customer.subscription.*`) and `GET /v1/events/stream`. Stage 4 (step 4.2, spec 0.4.0): the 8 `mandate.*` types carrying the public `Mandate` (40 consumed subjects).
 
 ## Built with
 

@@ -1,9 +1,9 @@
 /**
  * Test objects the kit has no factory for: the public `Refund`, the bus `Review` (Stage 2) and the public
- * `Invoice` / `Subscription` (Stage 3). Each is
+ * `Invoice` / `Subscription` (Stage 3) and the public `Mandate` (Stage 4). Each is
  * parsed by its spec schema, so a test cannot build an object that violates the contract.
  */
-import { Invoice, Refund, Subscription } from "@nearpay/spec";
+import { Invoice, Mandate, Refund, Subscription } from "@nearpay/spec";
 import { newId } from "@nearpay-internal/ids";
 import { Review } from "@nearpay-internal/spec";
 import { USDC_BASE, USDC_NEAR } from "@nearpay-internal/testing";
@@ -197,6 +197,51 @@ export function subscription(over: Partial<SubscriptionT> = {}): SubscriptionT {
     description: null,
     metadata: {},
     sequence: 1,
+    ...over,
+  });
+}
+
+type MandateT = z.infer<typeof Mandate>;
+const USDC_TOKEN = "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+
+/** A linked, collecting vault mandate (Stage 4; test mode unless `livemode` says otherwise). */
+export function mandate(over: Partial<MandateT> = {}): MandateT {
+  const t = unix();
+  const livemode = over.livemode ?? false;
+  return Mandate.parse({
+    id: newId("md"),
+    object: "mandate",
+    created: t - 600,
+    livemode,
+    status: "active",
+    link_status: "linked",
+    unlinked_reason: null,
+    collecting: true,
+    subscription: newId("sub"),
+    customer: newId("cus"),
+    vault_contract: livemode ? "v1.vault.nearpay.near" : "vault.sandbox.nearpay.near",
+    onchain_id: 3,
+    payer: "dana.near",
+    token: USDC_TOKEN,
+    asset_id: `nep141:${USDC_TOKEN}`,
+    merchant_receiver: "acme.near",
+    receiver_kind: "intents_account",
+    settlement_destination: newId("sd"),
+    amount_per_period: "25000000",
+    period_secs: 2_629_746,
+    start_at: t - 600,
+    max_periods: null,
+    fee_bps: 100,
+    collected_periods: 1,
+    balance: "50000000",
+    funded_periods: 2,
+    next_collect_at: t + 2_629_146,
+    last_collection: null,
+    collect_failures: 0,
+    canceled: null,
+    withdrawn: "0",
+    ext_ref: "sub_x",
+    sequence: 2,
     ...over,
   });
 }
