@@ -1,6 +1,6 @@
 /**
  * Domain → public objects (lld/webhooks.md §4): Stage 2 refunds, reviews, account.updated; Stage 3 billing
- * invoices and subscriptions.
+ * invoices and subscriptions; Stage 4 mandates.
  */
 import { API_VERSION, Event, PublicReview, Refund, SUBJECT_TO_WEBHOOK_TYPE, WEBHOOK_TYPES } from "@nearpay/spec";
 import { newId, uuidv7 } from "@nearpay-internal/ids";
@@ -16,7 +16,7 @@ import {
   publicObjectOf,
 } from "../../src/domain/event/public.js";
 import { canonicalEvent, publicType } from "../../src/domain/event/render.js";
-import { invoice, refund, review, subscription } from "../support/fixtures.js";
+import { invoice, mandate, refund, review, subscription } from "../support/fixtures.js";
 
 describe("modes", () => {
   it("keeps the envelope's mode; only mode-less types without one go to both modes", () => {
@@ -150,8 +150,9 @@ describe("Stage 3 billing types", () => {
     for (const e of SUBSCRIPTION_EVENTS)
       expect(publicType(`evt.billing.subscription.${e}`)).toBe(`customer.subscription.${e}`);
     expect(publicType("evt.billing.invoice.reminder")).toBeNull();
-    expect(publicType("evt.billing.mandate.activated")).toBeNull(); // Stage 4
-    const billing = Object.keys(SUBJECT_TO_WEBHOOK_TYPE).filter((s) => s.startsWith("evt.billing."));
+    const billing = Object.keys(SUBJECT_TO_WEBHOOK_TYPE).filter(
+      (s) => s.startsWith("evt.billing.") && !s.startsWith("evt.billing.mandate."),
+    );
     expect(billing).toHaveLength(12);
     for (const s of billing) expect(SUBJECTS[s as keyof typeof SUBJECTS].consumers).toContain("webhooks");
     expect([...INVOICE_TYPES].sort()).toEqual(INVOICE_EVENTS.map((e) => `invoice.${e}`).sort());
@@ -205,6 +206,71 @@ describe("Stage 3 billing types", () => {
           object_sequence: 2,
           data: data as unknown as Record<string, unknown>,
           previous: type.endsWith(".updated") ? { status: "trialing" } : null,
+          request: null,
+          created_at: new Date(),
+        },
+        API_VERSION,
+      );
+      const r = Event.safeParse(e);
+      expect(r.success, `${type}: ${r.success ? "" : r.error.issues[0]?.message}`).toBe(true);
+    }
+  });
+});
+
+describe("Stage 4 mandate types", () => {
+  const MANDATE_EVENTS = [
+    "activated",
+    "collected",
+    "insufficient_funds",
+    "canceled",
+    "exhausted",
+    "updated",
+    "unlinked",
+    "released",
+  ] as const;
+
+  it("maps the 8 mandate subjects to mandate.* (the vault's raw events stay internal)", () => {
+    for (const e of MANDATE_EVENTS) expect(publicType(`evt.billing.mandate.${e}`)).toBe(`mandate.${e}`);
+    const mandates = Object.keys(SUBJECT_TO_WEBHOOK_TYPE).filter((s) => s.startsWith("evt.billing.mandate."));
+    expect(mandates.sort()).toEqual(MANDATE_EVENTS.map((e) => `evt.billing.mandate.${e}`).sort());
+    for (const s of mandates) expect(SUBJECTS[s as keyof typeof SUBJECTS].consumers).toContain("webhooks");
+    expect(publicType("evt.rails.vault.event")).toBeNull();
+  });
+
+  it("passes a Mandate through in its mode, keeping its sequence", () => {
+    for (const livemode of [false, true])
+      for (const e of MANDATE_EVENTS) {
+        const m = mandate({ livemode, sequence: 9 });
+        const p = publicObjectOf(`mandate.${e}`, m, livemode);
+        expect(p, e).toEqual({ ok: m });
+        expect(objectSequence((p as { ok: unknown }).ok, 1)).toBe(9);
+      }
+  });
+
+  it("refuses a mandate in the other mode than its envelope (nested-livemode guard, INV-8) or off-contract", () => {
+    expect(publicObjectOf("mandate.activated", mandate({ livemode: false }), true)).toEqual({
+      invalid: "data.object.livemode disagrees with the envelope (livemode true)",
+    });
+    expect(publicObjectOf("mandate.collected", { ...mandate(), balance: "-1" }, false)).toMatchObject({
+      invalid: expect.stringMatching(/not a valid mandate.collected object: balance/),
+    });
+    expect(publicObjectOf("mandate.updated", { ...mandate(), object: "invoice" }, false)).toMatchObject({
+      invalid: expect.stringMatching(/not a valid mandate.updated object/),
+    });
+  });
+
+  it("renders every mandate type as a spec Event (with previous attributes for updates)", () => {
+    const types = Object.keys(WEBHOOK_TYPES).filter((t) => t.startsWith("mandate."));
+    expect(types.sort()).toEqual(MANDATE_EVENTS.map((e) => `mandate.${e}`).sort());
+    for (const type of types) {
+      const e = canonicalEvent(
+        {
+          id: uuidv7(),
+          type,
+          livemode: true,
+          object_sequence: 2,
+          data: mandate({ livemode: true }) as unknown as Record<string, unknown>,
+          previous: type === "mandate.updated" ? { balance: "75000000" } : null,
           request: null,
           created_at: new Date(),
         },

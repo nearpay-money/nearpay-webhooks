@@ -45,16 +45,16 @@ import { INGESTED, webhooksHandlers } from "../../src/consumers/handlers.js";
 import { publicObjectOf } from "../../src/domain/event/public.js";
 import { pingObject } from "../../src/domain/event/render.js";
 import { newEndpointSecret, signatureHeader, signingKeyFromSeed } from "../../src/signing/signer.js";
-import { invoice, refund, review, subscription } from "../support/fixtures.js";
+import { invoice, mandate, refund, review, subscription } from "../support/fixtures.js";
 
 const ALL = [...PUBLIC_ROUTES, ...INTERNAL_ROUTES];
 
 describe("routes and events", () => {
-  it("binds every Stage 1–3 webhooks route (Stage 3: the events stream), and nothing else", () => {
+  it("binds every Stage 1–4 webhooks route (Stage 3: the events stream; Stage 4 adds none), and nothing else", () => {
     const bindings = webhooksRoutes({} as never);
     expect(unimplementedRoutes("webhooks", ALL, bindings).map((r) => r.id)).toEqual([]);
     expect(bindings.map((b) => b.route.id).sort()).toEqual(
-      ALL.filter((r) => r.service === "webhooks" && r.stage <= 3)
+      ALL.filter((r) => r.service === "webhooks" && r.stage <= 4)
         .map((r) => r.id)
         .sort(),
     );
@@ -70,8 +70,8 @@ describe("routes and events", () => {
     );
   });
 
-  it("is built against spec 0.3.1: rotate_secret and resend as the LLD describes them", () => {
-    expect(SPEC_VERSION).toBe("0.3.1");
+  it("is built against spec 0.4.0: rotate_secret and resend as the LLD describes them", () => {
+    expect(SPEC_VERSION).toBe("0.4.0");
     expect(rotateWebhookEndpointSecret).toMatchObject({
       method: "POST",
       path: "/v1/webhook_endpoints/{id}/rotate_secret",
@@ -115,11 +115,11 @@ describe("routes and events", () => {
     }
   });
 
-  it("handles every subject the catalogue routes to webhooks (payments, agentpay, identity, compliance, billing), each with a public type", () => {
+  it("handles every subject the catalogue routes to webhooks (payments, agentpay, identity, compliance, billing incl. mandates), each with a public type", () => {
     const handlers = webhooksHandlers({} as never, {} as never);
     expect(unhandledSubjects("webhooks", handlers)).toEqual([]);
     expect(Object.keys(handlers).sort()).toEqual([...INGESTED].sort());
-    expect(INGESTED).toHaveLength(32);
+    expect(INGESTED).toHaveLength(40);
     expect(INGESTED).toEqual(
       expect.arrayContaining([
         "evt.payments.refund.created",
@@ -143,9 +143,20 @@ describe("routes and events", () => {
         "evt.billing.subscription.updated",
         "evt.billing.subscription.deleted",
         "evt.billing.subscription.renewal_upcoming",
+        // stage 4 — auto-debit
+        "evt.billing.mandate.activated",
+        "evt.billing.mandate.collected",
+        "evt.billing.mandate.insufficient_funds",
+        "evt.billing.mandate.canceled",
+        "evt.billing.mandate.exhausted",
+        "evt.billing.mandate.updated",
+        "evt.billing.mandate.unlinked",
+        "evt.billing.mandate.released",
       ]),
     );
     expect(INGESTED).not.toContain("evt.billing.invoice.reminder");
+    // the vault's raw chain events are billing's input, never public
+    expect(INGESTED).not.toContain("evt.rails.vault.event");
     for (const s of INGESTED) {
       expect(SUBJECTS[s].consumers).toContain("webhooks");
       expect(SUBJECT_TO_WEBHOOK_TYPE[s], s).toBeDefined();
@@ -253,6 +264,8 @@ const objects: Record<string, () => Record<string, unknown>> = {
   // stage 3 — billing (`customer.subscription.*` carries a Subscription)
   invoice: () => invoice() as unknown as Record<string, unknown>,
   customer: () => subscription() as unknown as Record<string, unknown>,
+  // stage 4 — auto-debit (`mandate.*` carries the public Mandate)
+  mandate: () => mandate() as unknown as Record<string, unknown>,
 };
 
 describe("objects", () => {
