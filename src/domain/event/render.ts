@@ -4,8 +4,9 @@
  * spec's version transformers. `data.object.sequence` is always present: objects that do not carry
  * their own sequence get the aggregate version of the domain event (`object_sequence`).
  */
-import { type Event, renderEvent, SUBJECT_TO_WEBHOOK_TYPE, type WebhookType } from "@nearpay/spec";
+
 import { fromUuid } from "@nearpay-internal/ids";
+import { type Event, renderEvent, SUBJECT_TO_WEBHOOK_TYPE, type WebhookType } from "@nearpay-money/spec";
 
 export interface StoredEvent {
   readonly id: string;

@@ -6,6 +6,11 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { unhandledSubjects } from "@nearpay-internal/bus";
+import { fromUuid, newId, uuidv7 } from "@nearpay-internal/ids";
+import { unimplementedRoutes } from "@nearpay-internal/service";
+import { envelopeOf, INTERNAL_ROUTES, SUBJECTS, type Subject } from "@nearpay-internal/spec";
+import { account, agentPayment, checkoutSession, paymentIntent } from "@nearpay-internal/testing";
 import {
   API_VERSION,
   createWebhookEndpoint,
@@ -25,12 +30,7 @@ import {
   WEBHOOK_TYPES,
   WebhookDelivery,
   WebhookEndpoint,
-} from "@nearpay/spec";
-import { unhandledSubjects } from "@nearpay-internal/bus";
-import { fromUuid, newId, uuidv7 } from "@nearpay-internal/ids";
-import { unimplementedRoutes } from "@nearpay-internal/service";
-import { envelopeOf, INTERNAL_ROUTES, SUBJECTS, type Subject } from "@nearpay-internal/spec";
-import { account, agentPayment, checkoutSession, paymentIntent } from "@nearpay-internal/testing";
+} from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import { webhooksRoutes } from "../../src/api/routes.js";
 import {
@@ -71,7 +71,7 @@ describe("routes and events", () => {
   });
 
   it("is built against spec 0.4.0: rotate_secret and resend as the LLD describes them", () => {
-    expect(SPEC_VERSION).toBe("0.4.0");
+    expect(SPEC_VERSION).toBe("0.5.0"); // public package renamed to @nearpay-money/spec (0.5.0 = 0.4.2 contracts)
     expect(rotateWebhookEndpointSecret).toMatchObject({
       method: "POST",
       path: "/v1/webhook_endpoints/{id}/rotate_secret",

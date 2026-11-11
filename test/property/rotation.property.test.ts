@@ -6,7 +6,7 @@
  * The oracle below is written from the spec text, independently of `src/domain/endpoint/secrets.ts`.
  */
 import { timingSafeEqual } from "node:crypto";
-import { parseSignatureHeader, signedPayload } from "@nearpay/spec";
+import { parseSignatureHeader, signedPayload } from "@nearpay-money/spec";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {

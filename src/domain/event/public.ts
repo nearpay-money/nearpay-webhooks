@@ -14,8 +14,9 @@
  *   the bus (`InvoiceEvent`); a domain invoice that carries one is refused (dead letter) so the secret
  *   can never reach a public event, a webhook delivery or the events stream.
  */
-import { WEBHOOK_TYPES, type WebhookType } from "@nearpay/spec";
+
 import { Review, toPublicReview } from "@nearpay-internal/spec";
+import { WEBHOOK_TYPES, type WebhookType } from "@nearpay-money/spec";
 
 /** Public types whose object has no mode; delivered in both modes. */
 export const MODELESS_TYPES: ReadonlySet<WebhookType> = new Set<WebhookType>(["account.updated"]);

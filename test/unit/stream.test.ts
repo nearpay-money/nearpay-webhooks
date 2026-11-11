@@ -1,6 +1,7 @@
 /** Events stream rules (lld/webhooks.md §5.1): types filter, resume outcome, UUIDv7 bounds, tail bookkeeping. */
-import { EVENT_STREAM_MAX_CONCURRENT, EVENT_STREAM_MAX_SECONDS } from "@nearpay/spec";
+
 import { uuidv7 } from "@nearpay-internal/ids";
+import { EVENT_STREAM_MAX_CONCURRENT, EVENT_STREAM_MAX_SECONDS } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import {
   MAX_DURATION_MS,

@@ -11,9 +11,10 @@
  *    schedule or abandon after 72 h) and the endpoint's streak (success clears it; > 72 h of failures
  *    → disabled + `evt.webhooks.endpoint.disabled` in the outbox, which notify turns into an email).
  */
-import { API_VERSION, HEADERS } from "@nearpay/spec";
+
 import { emit, sql } from "@nearpay-internal/db";
 import { fromUuid, uuidv7 } from "@nearpay-internal/ids";
+import { API_VERSION, HEADERS } from "@nearpay-money/spec";
 import { need, secretAad, type Webhooks } from "../app/context.js";
 import { transition } from "../app/endpoints.js";
 import { secretState } from "../app/views.js";

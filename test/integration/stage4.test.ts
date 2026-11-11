@@ -5,8 +5,8 @@
  * mandate in the other mode than its envelope is dead-lettered (nested-livemode guard, INV-8).
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { Event, Mandate } from "@nearpay/spec";
 import { domainEvent } from "@nearpay-internal/testing";
+import { Event, Mandate } from "@nearpay-money/spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mandate } from "../support/fixtures.js";
 import { type Frame, openSse } from "../support/sse.js";

@@ -1,5 +1,5 @@
 /** Event subscriptions of an endpoint (lld/webhooks.md §5–§6). */
-import { WEBHOOK_TYPE_NAMES } from "@nearpay/spec";
+import { WEBHOOK_TYPE_NAMES } from "@nearpay-money/spec";
 
 const KNOWN = new Set<string>(WEBHOOK_TYPE_NAMES);
 

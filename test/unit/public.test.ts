@@ -2,10 +2,11 @@
  * Domain → public objects (lld/webhooks.md §4): Stage 2 refunds, reviews, account.updated; Stage 3 billing
  * invoices and subscriptions; Stage 4 mandates.
  */
-import { API_VERSION, Event, PublicReview, Refund, SUBJECT_TO_WEBHOOK_TYPE, WEBHOOK_TYPES } from "@nearpay/spec";
+
 import { newId, uuidv7 } from "@nearpay-internal/ids";
 import { InvoiceEvent, SUBJECTS } from "@nearpay-internal/spec";
 import { account } from "@nearpay-internal/testing";
+import { API_VERSION, Event, PublicReview, Refund, SUBJECT_TO_WEBHOOK_TYPE, WEBHOOK_TYPES } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import { objectSequence } from "../../src/app/events.js";
 import {

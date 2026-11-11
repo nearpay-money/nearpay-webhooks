@@ -15,7 +15,7 @@ import {
   randomBytes,
   sign,
 } from "node:crypto";
-import { formatSignatureHeader, signedPayload } from "@nearpay/spec";
+import { formatSignatureHeader, signedPayload } from "@nearpay-money/spec";
 
 export interface WebhookSigningKey {
   readonly kid: string;

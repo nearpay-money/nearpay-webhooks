@@ -1,8 +1,8 @@
-/** Signature vectors shared with `@nearpay/node`'s verify helper (spec test-vectors/webhook-signatures.json). */
+/** Signature vectors shared with `@nearpay-money/node`'s verify helper (spec test-vectors/webhook-signatures.json). */
 import { createPublicKey, verify as edVerify, generateKeyPairSync, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { parseSignatureHeader, signedPayload, WEBHOOK_TOLERANCE_SECONDS } from "@nearpay/spec";
+import { parseSignatureHeader, signedPayload, WEBHOOK_TOLERANCE_SECONDS } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import {
   defaultKid,
@@ -16,7 +16,9 @@ import {
 } from "../../src/signing/signer.js";
 
 const require = createRequire(import.meta.url);
-const V = JSON.parse(readFileSync(require.resolve("@nearpay/spec/test-vectors/webhook-signatures.json"), "utf8")) as {
+const V = JSON.parse(
+  readFileSync(require.resolve("@nearpay-money/spec/test-vectors/webhook-signatures.json"), "utf8"),
+) as {
   secret: string;
   secondary_secret: string;
   ed25519: { kid: string; seed_hex: string; public_key_base64url: string };

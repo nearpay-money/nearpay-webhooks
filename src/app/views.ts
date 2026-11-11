@@ -1,12 +1,13 @@
 /** Rows → spec objects (`WebhookEndpoint`, `Event`, `WebhookDelivery`). */
+
+import { fromUuid } from "@nearpay-internal/ids";
 import {
   API_VERSION,
   type WebhookDelivery as Delivery,
   type WebhookEndpoint as Endpoint,
   type Event,
   type WebhookType,
-} from "@nearpay/spec";
-import { fromUuid } from "@nearpay-internal/ids";
+} from "@nearpay-money/spec";
 import type { Selectable } from "kysely";
 import type { z } from "zod";
 import { previousExpiry, type SecretState } from "../domain/endpoint/secrets.js";

@@ -12,9 +12,10 @@
  * than the 30-day window are 404, like `GET /v1/events/{id}`. The event keeps its id, so receivers dedupe
  * on `NearPay-Event-Id`.
  */
-import type { EventResend as EventResendSchema } from "@nearpay/spec";
+
 import { fromUuid, isId, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
+import type { EventResend as EventResendSchema } from "@nearpay-money/spec";
 import type { z } from "zod";
 import { planResend, resendTargets } from "../domain/delivery/resend.js";
 import type { Merchant, Webhooks } from "./context.js";

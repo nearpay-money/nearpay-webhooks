@@ -3,10 +3,11 @@
  * `Invoice` / `Subscription` (Stage 3) and the public `Mandate` (Stage 4). Each is
  * parsed by its spec schema, so a test cannot build an object that violates the contract.
  */
-import { Invoice, Mandate, Refund, Subscription } from "@nearpay/spec";
+
 import { newId } from "@nearpay-internal/ids";
 import { Review } from "@nearpay-internal/spec";
 import { USDC_BASE, USDC_NEAR } from "@nearpay-internal/testing";
+import { Invoice, Mandate, Refund, Subscription } from "@nearpay-money/spec";
 import type { z } from "zod";
 
 type RefundT = z.infer<typeof Refund>;
