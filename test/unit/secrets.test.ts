@@ -1,6 +1,7 @@
 /** Secret rotation examples (lld/webhooks.md §5) and the endpoint view during an overlap. */
-import { API_VERSION, WebhookEndpoint } from "@nearpay/spec";
+
 import { uuidv7 } from "@nearpay-internal/ids";
+import { API_VERSION, WebhookEndpoint } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import { type EndpointRow, endpointView } from "../../src/app/views.js";
 import {

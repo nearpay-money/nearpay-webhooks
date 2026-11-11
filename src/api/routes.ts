@@ -3,6 +3,16 @@
  * idempotency (POSTs with `Idempotency-Key`; responses stored envelope-encrypted because the create
  * response carries the signing secret) are enforced from the spec by the service bootstrap.
  */
+
+import { isId, toUuid } from "@nearpay-internal/ids";
+import {
+  ApiError,
+  implement,
+  type RequestContext,
+  type RouteBinding,
+  respond,
+  resumeCursor,
+} from "@nearpay-internal/service";
 import {
   createWebhookEndpoint,
   deleteWebhookEndpoint,
@@ -17,16 +27,7 @@ import {
   streamEvents as streamEventsRoute,
   testWebhookEndpoint,
   updateWebhookEndpoint,
-} from "@nearpay/spec";
-import { isId, toUuid } from "@nearpay-internal/ids";
-import {
-  ApiError,
-  implement,
-  type RequestContext,
-  type RouteBinding,
-  respond,
-  resumeCursor,
-} from "@nearpay-internal/service";
+} from "@nearpay-money/spec";
 import { type Merchant, need, type Webhooks } from "../app/context.js";
 import { listDeliveries } from "../app/deliveries.js";
 import {

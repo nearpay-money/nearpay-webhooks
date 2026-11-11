@@ -1,6 +1,6 @@
 # nearpay-webhooks image (lld/00-foundations.md §15, lld/platform.md §1 "Service image contract").
 # Built by nearpay-deploy/scripts/up.sh with `docker build --network host --build-arg NP_REGISTRY_URL=…`
-# so @nearpay/* and @nearpay-internal/* install from the local registry (ADR-0001).
+# so @nearpay-money/* and @nearpay-internal/* install from the local registry (ADR-0001).
 # Processes: `dist/main.js api|ingest|dispatcher|migrate` (Compose passes the command).
 
 FROM node:22-bookworm-slim AS build
@@ -10,7 +10,7 @@ RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml .npmrc ./
 RUN pnpm install --frozen-lockfile \
-      --config.@nearpay:registry="${NP_REGISTRY_URL}/" --config.@nearpay-internal:registry="${NP_REGISTRY_URL}/"
+      --config.@nearpay-money:registry="${NP_REGISTRY_URL}/" --config.@nearpay-internal:registry="${NP_REGISTRY_URL}/"
 COPY tsconfig.base.json tsconfig.build.json ./
 COPY src ./src
 RUN pnpm build
@@ -22,7 +22,7 @@ RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml .npmrc ./
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts \
-      --config.@nearpay:registry="${NP_REGISTRY_URL}/" --config.@nearpay-internal:registry="${NP_REGISTRY_URL}/"
+      --config.@nearpay-money:registry="${NP_REGISTRY_URL}/" --config.@nearpay-internal:registry="${NP_REGISTRY_URL}/"
 
 FROM gcr.io/distroless/nodejs22-debian12:nonroot
 WORKDIR /app

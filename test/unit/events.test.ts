@@ -1,8 +1,9 @@
 /** Subscriptions, the domain → public mapping and version rendering (lld/webhooks.md §4, §11). */
-import { API_VERSION, Event, SUBJECT_TO_WEBHOOK_TYPE, WEBHOOK_TYPE_NAMES, WEBHOOK_TYPES } from "@nearpay/spec";
+
 import { fromUuid, uuidv7 } from "@nearpay-internal/ids";
 import { SUBJECTS, type Subject } from "@nearpay-internal/spec";
 import { agentPayment, checkoutSession, paymentIntent } from "@nearpay-internal/testing";
+import { API_VERSION, Event, SUBJECT_TO_WEBHOOK_TYPE, WEBHOOK_TYPE_NAMES, WEBHOOK_TYPES } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import { objectSequence } from "../../src/app/events.js";
 import { normalizeEnabledEvents, SUBSCRIBABLE, subscribes } from "../../src/domain/endpoint/events.js";

@@ -5,9 +5,9 @@
  * API; ingest idempotency; jobs; the Valkey semaphore; the ops CLI.
  */
 import { createPublicKey, randomUUID, timingSafeEqual, verify } from "node:crypto";
-import { parseSignatureHeader, signedPayload, WebhookDelivery } from "@nearpay/spec";
 import { fromUuid, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { agentPayment, checkoutSession, domainEvent, expectEvent, paymentIntent } from "@nearpay-internal/testing";
+import { parseSignatureHeader, signedPayload, WebhookDelivery } from "@nearpay-money/spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { webhooksHandlers } from "../../src/consumers/handlers.js";
 import { claimDue, deliverOne } from "../../src/dispatcher/dispatcher.js";

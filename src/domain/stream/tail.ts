@@ -16,7 +16,7 @@
  *
  * UUIDs are compared as lowercase strings: their byte order (what Postgres uses) is their string order.
  */
-import { EVENT_STREAM_MAX_CONCURRENT, EVENT_STREAM_MAX_SECONDS } from "@nearpay/spec";
+import { EVENT_STREAM_MAX_CONCURRENT, EVENT_STREAM_MAX_SECONDS } from "@nearpay-money/spec";
 import { normalizeEnabledEvents } from "../endpoint/events.js";
 
 /** Rows younger than this (since insert) are not streamed yet: their lower-id neighbours may still commit. */

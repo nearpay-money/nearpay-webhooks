@@ -4,7 +4,7 @@
  * resend_no)` is ever planned twice, every resend number is ≥ 1, numbers per pair stay contiguous, and
  * targets without `endpoint` are exactly the enabled endpoints subscribed to the type.
  */
-import { WEBHOOK_TYPE_NAMES } from "@nearpay/spec";
+import { WEBHOOK_TYPE_NAMES } from "@nearpay-money/spec";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { MAX_RESEND_NO, planResend, type ResendTarget, resendTargets } from "../../src/domain/delivery/resend.js";

@@ -5,9 +5,9 @@
  * new delivery per endpoint, `(event, endpoint, resend_no)` unique, concurrent resends serialised).
  */
 import { timingSafeEqual } from "node:crypto";
-import { Event, parseSignatureHeader, signedPayload, WebhookDelivery } from "@nearpay/spec";
 import { fromUuid, newId, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { account, domainEvent, expectEvent, paymentIntent } from "@nearpay-internal/testing";
+import { Event, parseSignatureHeader, signedPayload, WebhookDelivery } from "@nearpay-money/spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { webhooksHandlers } from "../../src/consumers/handlers.js";
 import { hmacV1 } from "../../src/signing/signer.js";

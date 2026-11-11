@@ -8,11 +8,11 @@
  * across replicas via Valkey, 1 h → shortened, slow readers, shutdown).
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { API_VERSION, EVENT_STREAM_RETRY_MS, Event, EventStreamReady, EventStreamReset } from "@nearpay/spec";
 import { createDb, type Kysely } from "@nearpay-internal/db";
 import { fromUuid, newId, uuidv7 } from "@nearpay-internal/ids";
 import type { Service } from "@nearpay-internal/service";
 import { domainEvent, testKeySource } from "@nearpay-internal/testing";
+import { API_VERSION, EVENT_STREAM_RETRY_MS, Event, EventStreamReady, EventStreamReset } from "@nearpay-money/spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { notifyEvents } from "../../src/app/events.js";
 import { createApi } from "../../src/app/services.js";

@@ -1,6 +1,7 @@
 /** The delivery summary served by `GET /v1/webhook_endpoints/{id}/deliveries` (spec 0.1.5). */
-import { WebhookDelivery } from "@nearpay/spec";
+
 import { fromUuid, uuidv7 } from "@nearpay-internal/ids";
+import { WebhookDelivery } from "@nearpay-money/spec";
 import { describe, expect, it } from "vitest";
 import { type DeliveryRow, deliveryView } from "../../src/app/views.js";
 

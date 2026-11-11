@@ -4,10 +4,11 @@
  * event delivered to this endpoint only) and, from Stage 2, `rotate_secret` (overlap window during which
  * deliveries carry both `v1=` signatures). Every status change, and every rotation, writes a transition row.
  */
-import { API_VERSION, type Event } from "@nearpay/spec";
+
 import { emit } from "@nearpay-internal/db";
 import { fromUuid, isId, toUuid, uuidv7 } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
+import { API_VERSION, type Event } from "@nearpay-money/spec";
 import { normalizeEnabledEvents } from "../domain/endpoint/events.js";
 import { DEFAULT_OVERLAP_SECONDS, previousExpiry, rotateSecret } from "../domain/endpoint/secrets.js";
 import { endpointUrlProblem } from "../domain/endpoint/url.js";
