@@ -55,8 +55,15 @@ export async function expireSecrets(w: Webhooks): Promise<number> {
   return Number(r.numUpdatedRows);
 }
 
-/** Deletes events older than the retention window with their deliveries and attempts. */
-export async function purgeEvents(w: Webhooks): Promise<{ events: number; deliveries: number; attempts: number }> {
+/**
+ * Deletes events older than the retention window with their deliveries and attempts, one batch per transaction.
+ * `onBatch` runs after every batch (the job extends its lease there, which also beats the job worker's liveness
+ * heartbeat, kit 0.6.0: a large backlog can take longer than the 60 s lease).
+ */
+export async function purgeEvents(
+  w: Webhooks,
+  onBatch?: () => Promise<void>,
+): Promise<{ events: number; deliveries: number; attempts: number }> {
   const cutoff = new Date(w.now() - RETENTION_DAYS * 86_400_000);
   const total = { events: 0, deliveries: 0, attempts: 0 };
   for (;;) {
@@ -81,6 +88,7 @@ export async function purgeEvents(w: Webhooks): Promise<{ events: number; delive
     total.deliveries += r.deliveries;
     total.attempts += r.attempts;
     if (r.events < BATCH) return total;
+    await onBatch?.();
   }
 }
 
@@ -94,8 +102,8 @@ export function jobHandlers(w: Webhooks): Record<string, JobHandler> {
       const n = await expireSecrets(w);
       if (n) w.log.info({ erased: n }, "rotated-out endpoint secrets erased after their overlap");
     },
-    [PURGE_JOB]: async () => {
-      w.log.info(await purgeEvents(w), "events past retention purged");
+    [PURGE_JOB]: async (_payload, ctx) => {
+      w.log.info(await purgeEvents(w, () => ctx.extendLease()), "events past retention purged");
     },
     "kit.purge": async () => {
       w.log.info(await purgeKitTables(w.db), "kit tables purged");

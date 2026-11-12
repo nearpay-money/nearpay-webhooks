@@ -4,12 +4,14 @@
  * print `{"error": …}` and exit 1 (2: usage).
  */
 import { parseArgs } from "node:util";
-import { sql } from "@nearpay-internal/db";
+import { DEAD_LETTER_USAGE, DeadLetterError, KitOpsUsageError, runKitOps, sql } from "@nearpay-internal/db";
 import { fromUuid, isId, toUuid } from "@nearpay-internal/ids";
 import { ApiError } from "@nearpay-internal/service";
+import type { Subject } from "@nearpay-internal/spec";
 import type { Webhooks } from "../app/context.js";
 import { transition } from "../app/endpoints.js";
 import { endpointView, eventView } from "../app/views.js";
+import { webhooksHandlers } from "../consumers/handlers.js";
 
 export const USAGE = `usage: ops.js <command> [arguments]
 
@@ -17,19 +19,46 @@ export const USAGE = `usage: ops.js <command> [arguments]
   event <evt_…>                       event with its deliveries and attempts
   retry <evt_…> [--endpoint <we_…>]   send the event again now (deliveries not yet succeeded)
   enable <we_…>                       re-enable a disabled endpoint (clears the failure streak)
-  backlog [--limit N]                 due deliveries: count, oldest, busiest endpoints`;
+  backlog [--limit N]                 due deliveries: count, oldest, busiest endpoints
+
+dead letters and the outbox (kit 0.6.0):
+${DEAD_LETTER_USAGE}`;
 
 class UsageError extends Error {}
 
 export interface OpsDeps {
   out?: (line: string) => void;
   err?: (line: string) => void;
+  /** Recorded as `resolved_by` on dead letters and skipped outbox rows (default `cli:$USER`). */
+  actor?: string;
+}
+
+const KIT_COMMANDS = new Set(["dead-letters", "outbox"]);
+
+/** `dead-letters …` / `outbox …` (kit `runKitOps`): consumer dead letters replay through the worker's handlers (inbox-deduped). */
+function kitOps(w: Webhooks, argv: readonly string[], actor: string): Promise<unknown> {
+  const handlers = webhooksHandlers(w);
+  return runKitOps(w.db, argv[0] as string, argv.slice(1), {
+    actor,
+    handlers: {
+      consumer: async (e) => {
+        const h = handlers[e.subject as Subject];
+        if (!h) throw new DeadLetterError("no_handler", `webhooks does not consume ${e.subject}`);
+        await h(e);
+      },
+    },
+  });
 }
 
 export async function runOps(argv: readonly string[], w: Webhooks, deps: OpsDeps = {}): Promise<number> {
   const out = deps.out ?? ((l: string) => process.stdout.write(`${l}\n`));
   const err = deps.err ?? ((l: string) => process.stderr.write(`${l}\n`));
   try {
+    if (KIT_COMMANDS.has(argv[0] ?? "")) {
+      const result = await kitOps(w, argv, deps.actor ?? `cli:${process.env.USER ?? "operator"}`);
+      out(JSON.stringify(result, (_k, v) => (typeof v === "bigint" ? v.toString() : v), 2));
+      return 0;
+    }
     const { values, positionals } = parseArgs({
       args: [...argv],
       allowPositionals: true,
@@ -44,6 +73,7 @@ export async function runOps(argv: readonly string[], w: Webhooks, deps: OpsDeps
     const code = (e as { code?: string }).code;
     if (
       e instanceof UsageError ||
+      e instanceof KitOpsUsageError ||
       code === "ERR_PARSE_ARGS_UNKNOWN_OPTION" ||
       code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE" ||
       code === "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL"
@@ -51,7 +81,11 @@ export async function runOps(argv: readonly string[], w: Webhooks, deps: OpsDeps
       err(`${e instanceof Error ? e.message : String(e)}\n\n${USAGE}`);
       return 2;
     }
-    err(JSON.stringify({ error: e instanceof ApiError ? { code: e.code, message: e.message } : String(e) }));
+    err(
+      JSON.stringify({
+        error: e instanceof ApiError || e instanceof DeadLetterError ? { code: e.code, message: e.message } : String(e),
+      }),
+    );
     return 1;
   }
 }

@@ -14,6 +14,7 @@
 
 import { emit, sql } from "@nearpay-internal/db";
 import { fromUuid, uuidv7 } from "@nearpay-internal/ids";
+import type { BackgroundTask, Heartbeat } from "@nearpay-internal/service";
 import { API_VERSION, HEADERS } from "@nearpay-money/spec";
 import { need, secretAad, type Webhooks } from "../app/context.js";
 import { transition } from "../app/endpoints.js";
@@ -269,11 +270,15 @@ async function attempt(d: Dispatcher, deliveryId: string): Promise<void> {
   });
 }
 
+/** Liveness budget of the dispatch loop (kit 0.6.0, KIT-4): it beats on every iteration, failed claims included. */
+export const DISPATCHER_MAX_SILENCE_MS = 120_000;
+
 /** The dispatch loop as a background task: keeps up to `concurrency` deliveries in flight. */
-export function dispatcherTask(d: Dispatcher) {
+export function dispatcherTask(d: Dispatcher, o: { maxSilenceMs?: number } = {}): BackgroundTask {
   return {
     name: "dispatcher",
-    start() {
+    maxSilenceMs: o.maxSilenceMs ?? DISPATCHER_MAX_SILENCE_MS,
+    start(heartbeat?: Heartbeat) {
       let stopped = false;
       let wake: (() => void) | null = null;
       const inFlight = new Set<Promise<void>>();
@@ -305,6 +310,8 @@ export function dispatcherTask(d: Dispatcher) {
               inFlight.add(p);
             }
           }
+          // a hung claim stops the beats; slow deliveries do not (each has its own timeout and runs beside the loop)
+          heartbeat?.beat();
           if (stopped) break;
           if (free > 0 && claimed.length === free) continue;
           await sleep(d.settings.pollMs);
