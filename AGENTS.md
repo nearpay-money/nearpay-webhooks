@@ -1,6 +1,6 @@
 # AGENTS.md — nearpay-webhooks
 
-You are working in **nearpay-webhooks**, one of 27 NearPay repositories (`nearpay-brain/architecture/repositories.md`).
+You are working in **nearpay-webhooks**, one of 26 NearPay repositories (`nearpay-brain/architecture/repositories.md`).
 Scope: Public event log, webhook endpoints, signed delivery with retries, replay and delivery logs.
 
 ## Before changing anything

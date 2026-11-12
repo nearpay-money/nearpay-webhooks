@@ -1,6 +1,11 @@
 # nearpay-webhooks
 
-> Public event log, webhook endpoints, signed delivery with retries, replay and delivery logs.
+The public event log and webhook delivery service: webhook endpoints, signed deliveries with retries, resend, delivery logs and the live events stream.
+
+Part of [NearPay](https://github.com/nearpay-money/nearpay) — start there for the live demo, the architecture diagram and the full "do X, see Y" walkthrough.
+
+- **Where it sits:** it consumes the domain events of payments, billing, agentpay, identity and the other services from NATS, turns them into public events, and POSTs them to merchants' endpoints through an egress proxy (SSRF policy). The gateway routes `/v1/events`, `/v1/webhook_endpoints` and `/v1/webhook_signing_keys` here; the dashboard and `nearpay listen` (CLI) read the events stream. Merchants verify deliveries with `@nearpay-money/node`.
+- **Status:** NearPay runs on NEAR mainnet as a closed beta (https://nearpay.money). This service is part of that deployment.
 
 |                                       |                                                                                                            |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -13,15 +18,15 @@
 
 ## Documentation
 
-This repo stays surgical: design docs live in [`nearpay-brain`](../nearpay-brain/README.md), not here.
+Design docs live in [`nearpay-brain`](https://github.com/nearpay-money/nearpay-brain), not here.
 
-- `nearpay-brain/lld/webhooks.md` — **low-level design (dev-ready; implement from this)**
-- `nearpay-brain/lld/audits/webhooks.md` — audit findings already folded into the LLD
-- `nearpay-brain/roadmap/development-plan.md` — stage and step this repo is built in
-- `nearpay-brain/architecture/hld.md` — system design
-- `nearpay-brain/architecture/repositories.md` — repo topology and dependency rules
-- `nearpay-brain/architecture/api-conventions.md#9-webhooks`
-- `nearpay-brain/architecture/flows.md#8-event-and-webhook-delivery`
+- [`lld/webhooks.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/lld/webhooks.md) — low-level design this repo is implemented from
+- [`lld/audits/webhooks.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/lld/audits/webhooks.md) — audit findings already folded into the LLD
+- [`roadmap/development-plan.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/roadmap/development-plan.md) — stage and step this repo is built in
+- [`architecture/hld.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/hld.md) — system design
+- [`architecture/repositories.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/repositories.md) — repo topology and dependency rules
+- [`architecture/api-conventions.md#9-webhooks`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/api-conventions.md#9-webhooks)
+- [`architecture/flows.md#8-event-and-webhook-delivery`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/flows.md#8-event-and-webhook-delivery)
 
 ## Layout
 
@@ -52,10 +57,21 @@ nearpay-webhooks/
     └── unit/              domain, signing vectors, config
 ```
 
+## Verify this repo
+
+Needs Node 22 (`.nvmrc`) and pnpm 9. `.npmrc` points the `@nearpay-money` and `@nearpay-internal` scopes at a local package registry, so start that first.
+
+1. Start the local registry (no Docker, Node 22 only):
+   `git clone https://github.com/nearpay-money/nearpay-deploy ../nearpay-deploy && ../nearpay-deploy/scripts/registry.sh start`
+   → `curl http://127.0.0.1:4873/-/ping` answers `{}`.
+2. `pnpm install --frozen-lockfile` → ends with `Done in …`, no registry errors.
+3. `pnpm test` (unit and property tests: delivery rules, SSRF policy, secret rotation, the signature test vectors; no Docker) → `Test Files  15 passed (15)`, `Tests  133 passed (133)`.
+4. `pnpm verify` (the full gate: typecheck, lint, unit tests with the coverage gate of ≥ 90 % branches on `src/domain`, integration tests, build) → exits 0. The integration step starts Postgres, NATS and Valkey with Testcontainers plus an in-process proxy and merchant endpoint, so it needs a running Docker daemon; steps 1–3 do not. No test reaches the internet.
+
 ## Commands
 
 ```sh
-pnpm install                 # @nearpay-money/* from the local registry (nearpay-deploy/scripts/up.sh starts it)
+pnpm install --frozen-lockfile   # NearPay packages from the local registry (see "Verify this repo")
 pnpm verify                  # typecheck, lint, unit + property tests (coverage gate), integration, build
 pnpm test                    # unit + property only (no Docker)
 pnpm test:integration        # Testcontainers (Postgres, NATS, Valkey) + spec contract + egress tests
@@ -97,14 +113,21 @@ Integration tests in the cloud workspace: `TESTCONTAINERS_RYUK_DISABLED=true pnp
 - **Secret rotation**: `POST /v1/webhook_endpoints/{id}/rotate_secret` `{expire_previous_in_seconds 0–86400, default 86400}` returns the endpoint with the new `secret` (once) and `previous_secret_expires_at`. During the overlap every delivery carries two `v1=` signatures, the new secret first; at the expiry instant the previous secret stops signing; rotating during an overlap replaces the previous secret; `0` drops it at once. Allowed on disabled endpoints. Each rotation writes a `secret_rotated` transition (same status, evidence: the expiry). Reads show `previous_secret_expires_at` (null outside an overlap). The idempotent response is stored encrypted like create's.
 - **Resend**: `POST /v1/events/{id}/resend` `{endpoint?}` → `202 EventResend` with one new `pending` delivery (UUIDv7, fresh schedule and 72 h window) per endpoint: the given one (caller's, same mode — else `404` with `param: endpoint`; enabled — else `409 state_conflict`; subscriptions ignored) or every enabled endpoint subscribed to the type (a `ping` only to the endpoint it tested). Deliveries are unique on `(event_id, endpoint_id, resend_no)`: 0 is the original, each resend takes the next number; the event row is locked so concurrent resends never collide. Events past the 30-day window are `404`.
 
-## Ops CLI (Stage 1)
+## Ops CLI
 
-`docker compose -p nearpay exec webhooks-api /nodejs/bin/node dist/ops.js <command>`: `endpoint <we_…>` (no secret; transitions, delivery counts, recent deliveries), `event <evt_…>` (deliveries with their attempt logs), `retry <evt_…> [--endpoint <we_…>]`, `enable <we_…>`, `backlog [--limit N]`.
+`docker compose -p nearpay exec webhooks-api /nodejs/bin/node dist/ops.js <command>`: `endpoint <we_…>` (no secret; transitions, delivery counts, recent deliveries), `event <evt_…>` (deliveries with their attempt logs), `retry <evt_…> [--endpoint <we_…>]`, `enable <we_…>`, `backlog [--limit N]`, and the kit 0.6.0 commands `dead-letters …` and `outbox …`.
 
 ## Status
 
 Stages 1–2 implemented (step 1.2; spec 0.1.5 in step 1.4; spec 0.2.0 in step 2.2): every Stage 1–2 route of the spec (12, including the delivery log, `rotate_secret` and `resend`), the 20 consumed subjects, the produced `evt.webhooks.endpoint.disabled`. Stage 3 (step 3.2, spec 0.3.0): billing events (`invoice.*`, `customer.subscription.*`) and `GET /v1/events/stream`. Stage 4 (step 4.2, spec 0.4.0): the 8 `mandate.*` types carrying the public `Mandate` (40 consumed subjects).
 
+Current pins (`package.json`): `@nearpay-money/spec` 0.5.0, kit packages 0.6.0 (supervised consumers, liveness heartbeats, dead letters).
+
 ## Built with
 
-Fastify, Kysely, pg, NATS (via `@nearpay-internal/*`), ioredis, zod, Node's `http`/`https`/`tls` and `crypto` (HMAC-SHA256, Ed25519); Vitest, fast-check, Testcontainers, Biome. Code and documentation are written with AI assistance (Claude) under human direction and review.
+- Runtime: TypeScript on Node 22; Fastify, pg and NATS through the `@nearpay-internal/*` kit; Kysely, ioredis (Valkey), zod; Node's `http`/`https`/`tls` and `crypto` (HMAC-SHA256, Ed25519).
+- Deployment: deliveries leave through an egress proxy (Smokescreen in nearpay-deploy).
+- Tests and tooling: Vitest, fast-check, Testcontainers, Biome.
+- Licence: Apache-2.0 (`LICENSE`).
+
+Code and documentation are written with AI assistance (Claude) under human direction and review. Built for the NEAR Hackathon (Nov 2026).
